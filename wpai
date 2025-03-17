@@ -332,9 +332,9 @@ def generate_content(model_id, prompt, keyword):
     {prompt}
     
     Hãy tạo một bố cục chi tiết cho bài viết về chủ đề "{keyword}" với:
-    1. Phần giới thiệu chi tiết (khoảng 500 từ) giới thiệu về chủ đề và tại sao nó quan trọng
+    1. Phần giới thiệu chi tiết (khoảng 300 từ) giới thiệu về chủ đề và tại sao nó quan trọng
     2. ít nhât 8-10 tiêu đề chính (<h2>) với mô tả ngắn về nội dung của mỗi phần
-    3. ít nhất 2-3 tiêu đề phụ (<h3>) cho mỗi tiêu đề chính
+    3. ít nhất 3-4 tiêu đề phụ (<h3>) cho mỗi tiêu đề chính
     
     Format phản hồi:
     - Phần giới thiệu phải là đoạn văn HTML hoàn chỉnh với thẻ <p>
@@ -394,8 +394,8 @@ def generate_content(model_id, prompt, keyword):
     
     Yêu cầu:
     1. Bắt đầu với phần giới thiệu đã có (KHÔNG viết lại phần giới thiệu)
-    2. Dành ít nhất 700-900 từ cho mỗi tiêu đề chính
-    3. Sử dụng ít nhất 4-5 tiêu đề phụ (<h3>) cho mỗi tiêu đề chính
+    2. Dành ít nhất 500-700 từ cho mỗi tiêu đề chính
+    3. Sử dụng ít nhất 3-4 tiêu đề phụ (<h3>) cho mỗi tiêu đề chính
     4. Bao gồm ví dụ cụ thể, dữ liệu, và phân tích chuyên sâu
     5. Dùng các thẻ <p> cho đoạn văn, <ul><li> cho danh sách, <strong> để nhấn mạnh
     
@@ -416,8 +416,8 @@ def generate_content(model_id, prompt, keyword):
     
     Yêu cầu:
     1. Tiếp tục từ nửa đầu đã được phát triển (không lặp lại phần giới thiệu)
-    2. Dành ít nhất 700-900 từ cho mỗi tiêu đề chính
-    3. Sử dụng ít nhất 4-5 tiêu đề phụ (<h3>) cho mỗi tiêu đề chính
+    2. Dành ít nhất 5-700 từ cho mỗi tiêu đề chính
+    3. Sử dụng ít nhất 3-4 tiêu đề phụ (<h3>) cho mỗi tiêu đề chính
     4. Bao gồm ví dụ cụ thể, dữ liệu, và phân tích chuyên sâu
     5. Dùng các thẻ <p> cho đoạn văn, <ul><li> cho danh sách, <strong> để nhấn mạnh
     KHÔNG viết phần kết luận. Phần kết luận sẽ được tạo riêng.
@@ -438,7 +438,7 @@ def generate_content(model_id, prompt, keyword):
     
     Yêu cầu chi tiết cho phần kết luận:
     1. Tiêu đề phần kết luận phải sử dụng thẻ <h2>Kết luận</h2>
-    2. Độ dài phần kết luận phải từ 400-500 từ
+    2. Độ dài phần kết luận phải từ 300-500 từ
     3. Phần kết luận phải bao gồm:
        - Tóm tắt ngắn gọn nhưng đầy đủ các điểm chính đã được đề cập trong bài viết
        - Kết nối các ý tưởng và khái niệm lại với nhau một cách mạch lạc
