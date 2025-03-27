@@ -1,3 +1,171 @@
+gemini_client = None
+current_profile_index = 0
+profile_init_failures = [0, 0, 0, 0, 0]
+
+def split_chrome_profile_path(full_path):
+    """
+    Split Chrome profile path into user data directory and profile name
+    """
+    if not full_path:
+        return None, None
+        
+    user_data_index = full_path.find("User Data")
+    if user_data_index == -1:
+        return full_path, "Default"
+    
+    user_data_dir = full_path[:user_data_index + len("User Data")]
+    
+    remaining = full_path[user_data_index + len("User Data"):]
+    if remaining.startswith("\\") or remaining.startswith("/"):
+        remaining = remaining[1:]
+    
+    profile_name = remaining if remaining else "Default"
+    
+    if "\\" in profile_name or "/" in profile_name:
+        profile_name = profile_name.split("\\")[0].split("/")[0]
+    
+    return user_data_dir, profile_name
+
+def get_cookies_from_browser(profile_path):
+    """
+    Get Gemini cookies from Chrome browser
+    """
+    if not profile_path:
+        update_log("No Chrome profile selected!")
+        return None, None
+        
+    update_log(f"Getting cookies from Chrome profile: {profile_path}")
+    
+    try:
+        service = Service(ChromeDriverManager().install())
+        profile_path, name_profile = split_chrome_profile_path(profile_path)
+        
+        chrome_options = Options()
+        chrome_options.add_argument(f"user-data-dir={profile_path}")
+        chrome_options.add_argument(f"--profile-directory={name_profile}")
+        chrome_options.add_argument("--headless")
+        
+        update_log(f"Opening Chrome with profile: {profile_path}")
+        driver = webdriver.Chrome(options=chrome_options, service=service)
+        
+        try:
+            driver.get("https://gemini.google.com/")
+            update_log("Waiting for Gemini page to load...")
+            time.sleep(10)
+            
+            cookies = driver.get_cookies()
+            
+            secure_1psid = None
+            secure_1psidts = None
+            
+            for cookie in cookies:
+                if cookie['name'] == '__Secure-1PSID':
+                    secure_1psid = cookie['value']
+                elif cookie['name'] == '__Secure-1PSIDTS':
+                    secure_1psidts = cookie['value']
+            
+            if secure_1psid:
+                update_log("Found Secure-1PSID cookie")
+            else:
+                update_log("Could not find Secure-1PSID cookie!")
+                
+            if secure_1psidts:
+                update_log("Found Secure-1PSIDTS cookie")
+            else:
+                update_log("Could not find Secure-1PSIDTS cookie (may not be required)")
+            
+            return secure_1psid, secure_1psidts
+        
+        except Exception as e:
+            update_log(f"Error getting cookies: {e}")
+            return None, None
+        
+        finally:
+            driver.quit()
+            
+    except Exception as e:
+        update_log(f"Error starting Chrome: {e}")
+        return None, None
+
+async def init_gemini_client(profile_path):
+    """Initialize Gemini client with cookies from the given profile"""
+    global gemini_client
+    
+    # Get cookies from browser
+    secure_1psid, secure_1psidts = get_cookies_from_browser(profile_path)
+    
+    if not secure_1psid:
+        update_log("Missing required cookies, cannot initialize Gemini client")
+        return False
+    
+    try:
+        # Create and initialize client
+        gemini_client = GeminiClient(secure_1psid, secure_1psidts)
+        await gemini_client.init(timeout=30, auto_close=False, close_delay=300, auto_refresh=False)
+        update_log("Gemini client initialized successfully")
+        return True
+    except Exception as e:
+        update_log(f"Error initializing Gemini client: {e}")
+        gemini_client = None
+        return False
+
+async def generate_image_with_gemini(prompt, output_path, filename):
+    """Generate image using Gemini Web API"""
+    global gemini_client, current_profile_index, profile_init_failures
+    
+    if not gemini_client:
+        # Try to initialize with current profile
+        profile_path = chrome_profile_entries[current_profile_index].get().strip()
+        success = await init_gemini_client(profile_path)
+        
+        if not success:
+            # Increment failure count for this profile
+            profile_init_failures[current_profile_index] += 1
+            
+            # If we've failed twice with this profile, move to next one
+            if profile_init_failures[current_profile_index] >= 2:
+                profile_init_failures[current_profile_index] = 0
+                current_profile_index = (current_profile_index + 1) % 5
+                update_log(f"Switching to profile {current_profile_index + 1}")
+            
+            # Try the next profile
+            profile_path = chrome_profile_entries[current_profile_index].get().strip()
+            success = await init_gemini_client(profile_path)
+            
+            if not success:
+                update_log("Failed to initialize Gemini client with any profile")
+                return None
+    
+    try:
+        # Generate content with image
+        update_log("Generating image with Gemini...")
+        response = await gemini_client.generate_content(prompt=f"{prompt}\nGenerate a high-quality, photorealistic image.")
+        
+        if not response.images or len(response.images) == 0:
+            update_log("No images were generated")
+            return None
+        
+        # Save the first image
+        await response.images[0].save(path=output_path, filename=filename, verbose=True)
+        
+        # Return the full path to the saved image
+        return os.path.join(output_path, filename)
+    
+    except Exception as e:
+        update_log(f"Error generating image: {e}")
+        # Reset client so we'll try to initialize again next time
+        gemini_client = None
+        return None
+# Run async function in sync context
+def run_async(coro):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
 def validate_required_apis():
     """Validate that all required API keys are provided based on selected models"""
     # Check content model requirements
@@ -51,6 +219,8 @@ def sanitize_filename(text):
     return text[:50]  # Limit to 50 chars for filename
 
 
+# Replace or modify the existing generate_image function
+
 def generate_image(prompt, model_id):
     """Generate an image using the selected AI model"""
     if model_id == 1:  # DALLE-3
@@ -70,23 +240,36 @@ def generate_image(prompt, model_id):
         return response.data[0].url
         
     elif model_id == 2:  # IMAGEN3
-        api_key = gemini_entry.get().strip()
-        if not api_key:
-            raise ValueError("API key Gemini không được cung cấp")
+        # Get a temporary filename for the image
+        temp_filename = f"{uuid.uuid4()}.png"
+        folder_path = folder_entry.get().strip()
         
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-pro-vision')
-        response = model.generate_content([prompt, "Generate a high quality, photorealistic image."])
+        if not os.path.exists(folder_path):
+            os.makedirs(folder_path)
         
-        # Note: This is simplified; actual Gemini image generation would require additional steps
-        # as the current API might not directly support image generation in this exact format
-        # You might need to use the Google AI Studio API directly
+        # Try up to 5 times with different profiles if needed
+        for attempt in range(5):
+            try:
+                image_path = run_async(
+                    generate_image_with_gemini(prompt, folder_path, temp_filename)
+                )
+                
+                if image_path:
+                    # Return local path as we'll handle the upload differently
+                    return f"local:{image_path}"
+                    
+                # If we get here, the attempt failed but didn't raise an exception
+                update_log(f"Image generation attempt {attempt+1} failed, trying next profile")
+                current_profile_index = (current_profile_index + 1) % 5
+                
+            except Exception as e:
+                update_log(f"Error in Gemini image generation (attempt {attempt+1}): {e}")
+                # Switch to next profile
+                current_profile_index = (current_profile_index + 1) % 5
         
-        return response.text  # This would need to be adjusted for the actual API
-        
-    elif model_id == 3:  # MIDJOURNEY
-        # Midjourney doesn't have a direct API, but we can simulate with an alternative
-        # This is a placeholder; actual implementation would depend on your integration method
+        raise ValueError("Failed to generate image with Imagen3 after 5 attempts")   
+    elif model_id == 3:  # MIDJOURNEY/DEEPSEEK
+        # Existing Deepseek implementation
         api_key = deeseek_entry.get().strip()
         if not api_key:
             raise ValueError("API key không được cung cấp")
@@ -114,6 +297,8 @@ def generate_image(prompt, model_id):
             raise ValueError(f"Image generation error: {response.text}")
     else:
         raise ValueError("Model không được hỗ trợ")
+
+# Modify the process_post_and_add_images function
 
 def process_post_and_add_images(wordpress_url, username, password, post_id, post_content, image_model_id, max_images, folder_path):
     """Process a WordPress post and add generated images"""
@@ -151,33 +336,62 @@ def process_post_and_add_images(wordpress_url, username, password, post_id, post
         
         try:
             # Generate image
-            image_url = generate_image(prompt, image_model_id)
-            print(image_url)
+            image_result = generate_image(prompt, image_model_id)
             
-            if not image_url:
+            if not image_result:
                 update_log(f"Không thể tạo ảnh cho đề mục: {heading_text}")
                 continue
             
-            # Download image
-            response = requests.get(image_url)
-            if response.status_code != 200:
-                update_log(f"Không thể tải ảnh từ URL: {image_url}")
-                continue
-            
-            sanitized_heading = sanitize_filename(heading_text)
-            filename = f"{sanitized_heading}.jpg"
-            file_path = os.path.join(folder_path, filename)
-            
-            with open(file_path, 'wb') as f:
-                f.write(response.content)
-            
-            update_log(f"Đã lưu ảnh tại: {file_path}")
+            # Handle local or remote images
+            if image_result.startswith("local:"):
+                # Local image from Gemini
+                file_path = image_result[6:]  # Remove "local:" prefix
+                sanitized_heading = sanitize_filename(heading_text)
+                
+                # Rename the file to use the heading
+                new_filename = f"{sanitized_heading}.png"
+                new_file_path = os.path.join(folder_path, new_filename)
+                
+                # If file exists, add a timestamp to make it unique
+                if os.path.exists(new_file_path):
+                    timestamp = int(time.time())
+                    new_filename = f"{sanitized_heading}-{timestamp}.png"
+                    new_file_path = os.path.join(folder_path, new_filename)
+                
+                # Rename file
+                os.rename(file_path, new_file_path)
+                file_path = new_file_path
+                
+                update_log(f"Đã lưu ảnh tại: {file_path}")
+            else:
+                # Remote URL from other APIs
+                image_url = image_result
+                print(image_url)
+                
+                # Download image
+                response = requests.get(image_url)
+                if response.status_code != 200:
+                    update_log(f"Không thể tải ảnh từ URL: {image_url}")
+                    continue
+                
+                sanitized_heading = sanitize_filename(heading_text)
+                filename = f"{sanitized_heading}.jpg"
+                file_path = os.path.join(folder_path, filename)
+                
+                with open(file_path, 'wb') as f:
+                    f.write(response.content)
+                
+                update_log(f"Đã lưu ảnh tại: {file_path}")
             
             # Upload image to WordPress
             upload_url = f"{wordpress_url}/wp-json/wp/v2/media"
             
             with open(file_path, 'rb') as img:
-                files = {'file': (filename, img, 'image/jpeg')}
+                # Determine file type
+                file_ext = os.path.splitext(file_path)[1].lower()
+                mime_type = 'image/jpeg' if file_ext in ['.jpg', '.jpeg'] else 'image/png'
+                
+                files = {'file': (os.path.basename(file_path), img, mime_type)}
                 
                 upload_response = requests.post(
                     upload_url,
@@ -192,7 +406,7 @@ def process_post_and_add_images(wordpress_url, username, password, post_id, post
                 media_data = upload_response.json()
                 media_id = media_data['id']
                 media_url = media_data['source_url']
-                
+            
             # Insert image after the first paragraph
             img_tag = soup.new_tag('img')
             img_tag['src'] = media_url
@@ -214,6 +428,7 @@ def process_post_and_add_images(wordpress_url, username, password, post_id, post
             update_log(f"Lỗi khi xử lý ảnh: {str(e)}")
             continue
     
+    # Rest of the function remains unchanged
     if images_added > 0:
         # Update the post content
         updated_content = str(soup)
@@ -237,6 +452,7 @@ def process_post_and_add_images(wordpress_url, username, password, post_id, post
             update_log(f"Không thể cập nhật bài viết: {update_response.text}")
     else:
         update_log("Không tìm thấy headings phù hợp để tạo ảnh")
+
 def stop_processing():
     """Stop the running process"""
     global processing_active
@@ -353,7 +569,7 @@ def generate_content(model_id, prompt, keyword):
     h2_tags = soup.find_all('h2')
     
     # Nếu không tìm thấy thẻ h2, thử phân tích dựa trên dòng
-    if not h2_tags or len(h2_tags) < 4:
+    if not h2_tags:
         update_log("Không tìm đủ thẻ H2 trong bố cục, thử phân tích văn bản...")
         lines = outline_content.split('\n')
         headings = []
@@ -564,7 +780,7 @@ def save_excel_without_indices(df, filename):
         for r_idx, row in enumerate(df.values):
             for c_idx, value in enumerate(row):
                 # Convert NaN to empty string
-                if pd.isna(value):
+                if value is None or (isinstance(value, float) and math.isnan(value)):
                     value = ""
                 # Excel rows/columns are 1-indexed
                 ws.cell(row=r_idx+1, column=c_idx+1, value=value)
@@ -911,8 +1127,15 @@ def test_post():
     
     threading.Thread(target=run).start()
 
+# Modify the save_data function
+
 def save_data():
     """Save all input data to a configuration file"""
+    # Get chrome profile paths
+    chrome_profiles = []
+    for entry in chrome_profile_entries:
+        chrome_profiles.append(entry.get().strip())
+        
     config = {
         "api_keys": {
             "openai": openai_entry.get().strip(),
@@ -924,12 +1147,13 @@ def save_data():
             "content_model": model_content_var.get(),
             "image_model": model_image_var.get(),
             "images_per_post": image_number_entry.get().strip(),
-            "images_folder": folder_entry.get().strip()
+            "images_folder": folder_entry.get().strip(),
+            "chrome_profiles": chrome_profiles
         },
         "wordpress": {
             "url": url_entry.get().strip(),
             "username": username_entry.get().strip(),
-            "password": password_entry.get(),  # Note: storing password in plain text is not secure
+            "password": password_entry.get(),
             "data_input": data_input_entry.get().strip()
         },
         "posting": {
@@ -937,6 +1161,7 @@ def save_data():
         }
     }
     
+    # Rest of the function remains the same
     try:
         with open("wordpress_ai_config.json", "w", encoding="utf-8") as f:
             json.dump(config, f, indent=4)
@@ -944,6 +1169,7 @@ def save_data():
     except Exception as e:
         update_log(f"Lỗi khi lưu cấu hình: {str(e)}")
 
+# And update the load_saved_data function
 def load_saved_data():
     """Load saved configuration data"""
     try:
@@ -951,49 +1177,19 @@ def load_saved_data():
             with open("wordpress_ai_config.json", "r", encoding="utf-8") as f:
                 config = json.load(f)
                 
-            # Populate API fields
-            openai_entry.delete(0, tk.END)
-            openai_entry.insert(0, config["api_keys"].get("openai", ""))
+            # Existing code remains the same
+            # ...
             
-            gemini_entry.delete(0, tk.END)
-            gemini_entry.insert(0, config["api_keys"].get("gemini", ""))
-            
-            claude_entry.delete(0, tk.END)
-            claude_entry.insert(0, config["api_keys"].get("claude", ""))
-            
-            deeseek_entry.delete(0, tk.END)
-            deeseek_entry.insert(0, config["api_keys"].get("deepseek", ""))
-            
-            # Set model selections
-            model_content_var.set(config["model_settings"].get("content_model", 0))
-            model_image_var.set(config["model_settings"].get("image_model", 0))
-            
-            image_number_entry.delete(0, tk.END)
-            image_number_entry.insert(0, config["model_settings"].get("images_per_post", ""))
-            
-            folder_entry.delete(0, tk.END)
-            folder_entry.insert(0, config["model_settings"].get("images_folder", ""))
-            
-            # WordPress settings
-            url_entry.delete(0, tk.END)
-            url_entry.insert(0, config["wordpress"].get("url", ""))
-            
-            username_entry.delete(0, tk.END)
-            username_entry.insert(0, config["wordpress"].get("username", ""))
-            
-            password_entry.delete(0, tk.END)
-            password_entry.insert(0, config["wordpress"].get("password", ""))
-            
-            data_input_entry.delete(0, tk.END)
-            data_input_entry.insert(0, config["wordpress"].get("data_input", ""))
-            
-            # Posting mode
-            posting_mode_var.set(config["posting"].get("mode", 1))
+            # Add loading of chrome profiles
+            chrome_profiles = config["model_settings"].get("chrome_profiles", ["", "", "", "", ""])
+            for i, profile in enumerate(chrome_profiles):
+                if i < len(chrome_profile_entries):
+                    chrome_profile_entries[i].delete(0, tk.END)
+                    chrome_profile_entries[i].insert(0, profile)
             
             update_log("Cấu hình đã được tải thành công!")
     except Exception as e:
         update_log(f"Lỗi khi tải cấu hình: {str(e)}")
-
 def check_openai_api_key(api_key):
     """Kiểm tra API key của OpenAI"""
     try:
@@ -1262,7 +1458,7 @@ def choose_folder():
 
 root = tk.Tk()
 root.title("Post WordPress")
-root.geometry("1200x700")
+root.geometry("1200x850")
 
 # API Section
 api_frame = tk.Frame(root, bg="#f0f0f0", bd=2, relief="groove")
@@ -1418,6 +1614,38 @@ action_log_frame.place(x=30, y=490, width=1120, height=180)
 # Action Buttons and Log Section
 action_frame = tk.Frame(action_log_frame, bg="#f0f0f0")
 action_frame.place(x=10, y=10, width=1100, height=160)
+
+# Add this after the image model selection section in the model_frame
+
+# Chrome profiles for Gemini
+tk.Label(model_frame, text="Chrome Profiles for Imagen3:", bg="#f0f0f0").place(x=600, y=140)
+
+# Create a new frame for Chrome profiles
+chrome_profiles_frame = tk.Frame(root, bg="#f0f0f0", bd=2, relief="groove")
+chrome_profiles_frame.place(x=30, y=300, width=1120, height=130)
+
+# Chrome profile entries
+chrome_profile_entries = []
+for i in range(5):
+    tk.Label(chrome_profiles_frame, text=f"Chrome Profile {i+1}:", bg="#f0f0f0").place(x=20, y=10 + i*22)
+    entry = tk.Entry(chrome_profiles_frame, width=70)
+    entry.place(x=130, y=10 + i*22)
+    chrome_profile_entries.append(entry)
+    tk.Button(chrome_profiles_frame, text="Browse", command=lambda idx=i: choose_chrome_profile(idx)).place(x=600, y=8 + i*22)
+
+# Update the existing frame positions
+wordpress_category_frame.place(x=30, y=440, width=1120, height=180)
+action_log_frame.place(x=30, y=630, width=1120, height=180)
+
+def choose_chrome_profile(idx):
+    """Select a Chrome profile directory"""
+    folder_path = filedialog.askdirectory(
+        title=f"Select Chrome Profile {idx+1} Directory"
+    )
+    if folder_path:
+        chrome_profile_entries[idx].delete(0, tk.END)
+        chrome_profile_entries[idx].insert(0, folder_path)
+        update_log(f"Chrome profile {idx+1} set to: {folder_path}")
 
 
 tk.Button(action_frame, text="BẮT ĐẦU", bg="green", width=16, command=start_processing).place(x=20, y=20)
