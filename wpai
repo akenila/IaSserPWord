@@ -1,6 +1,7 @@
 gemini_client = None
 current_profile_index = 0
 profile_init_failures = [0, 0, 0, 0, 0]
+previous_chat_metadata = None
 
 def split_chrome_profile_path(full_path):
     """
@@ -111,7 +112,7 @@ async def init_gemini_client(profile_path):
 
 async def generate_image_with_gemini(prompt, output_path, filename):
     """Generate image using Gemini Web API"""
-    global gemini_client, current_profile_index, profile_init_failures
+    global gemini_client, current_profile_index, profile_init_failures, previous_chat_metadata  # Add previous_chat_metadata
     
     if not gemini_client:
         # Try to initialize with current profile
@@ -127,6 +128,8 @@ async def generate_image_with_gemini(prompt, output_path, filename):
                 profile_init_failures[current_profile_index] = 0
                 current_profile_index = (current_profile_index + 1) % 5
                 update_log(f"Switching to profile {current_profile_index + 1}")
+                # Reset previous chat metadata when switching profiles
+                previous_chat_metadata = None
             
             # Try the next profile
             profile_path = chrome_profile_entries[current_profile_index].get().strip()
@@ -137,9 +140,17 @@ async def generate_image_with_gemini(prompt, output_path, filename):
                 return None
     
     try:
-        # Generate content with image
+        # Generate content with image using previous chat metadata for continuity
         update_log("Generating image with Gemini...")
-        response = await gemini_client.generate_content(prompt=f"{prompt}\nGenerate a high-quality, photorealistic image.")
+        
+        # Start a chat with previous metadata if available
+        chat = gemini_client.start_chat(metadata=previous_chat_metadata)
+        
+        # Send the prompt
+        response = await chat.send_message(f"{prompt}\nGenerate a high-quality, photorealistic image.")
+        
+        # Save the metadata for next time
+        previous_chat_metadata = response.metadata
         
         if not response.images or len(response.images) == 0:
             update_log("No images were generated")
@@ -155,8 +166,11 @@ async def generate_image_with_gemini(prompt, output_path, filename):
         update_log(f"Error generating image: {e}")
         # Reset client so we'll try to initialize again next time
         gemini_client = None
+        # Also reset metadata on error
+        previous_chat_metadata = None
         return None
-# Run async function in sync context
+
+
 def run_async(coro):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -223,6 +237,7 @@ def sanitize_filename(text):
 
 def generate_image(prompt, model_id):
     """Generate an image using the selected AI model"""
+    global current_profile_index
     if model_id == 1:  # DALLE-3
         api_key = openai_entry.get().strip()
         if not api_key:
@@ -298,7 +313,34 @@ def generate_image(prompt, model_id):
     else:
         raise ValueError("Model không được hỗ trợ")
 
-# Modify the process_post_and_add_images function
+def reset_gemini_chat():
+    """Reset Gemini chat metadata to start a fresh conversation"""
+    global previous_chat_metadata
+    previous_chat_metadata = None
+    update_log("Gemini chat context has been reset")
+
+def stop_processing():
+    """Stop the running process"""
+    global processing_active, previous_chat_metadata
+    processing_active = False
+    previous_chat_metadata = None  # Reset chat when stopping
+    update_log("Đã nhận lệnh dừng. Đang dừng sau khi hoàn thành tác vụ hiện tại...")
+
+async def refresh_gemini_session():
+    """Refresh the Gemini session to keep it alive"""
+    global gemini_client
+    
+    if gemini_client:
+        try:
+            update_log("Refreshing Gemini session...")
+            await gemini_client.refresh()
+            update_log("Gemini session refreshed successfully")
+            return True
+        except Exception as e:
+            update_log(f"Error refreshing Gemini session: {e}")
+            return False
+    else:
+        return False
 
 def process_post_and_add_images(wordpress_url, username, password, post_id, post_content, image_model_id, max_images, folder_path):
     """Process a WordPress post and add generated images"""
@@ -453,11 +495,6 @@ def process_post_and_add_images(wordpress_url, username, password, post_id, post
     else:
         update_log("Không tìm thấy headings phù hợp để tạo ảnh")
 
-def stop_processing():
-    """Stop the running process"""
-    global processing_active
-    processing_active = False
-    update_log("Đã nhận lệnh dừng. Đang dừng sau khi hoàn thành tác vụ hiện tại...")
 
 # def generate_content(model_id, prompt, keyword):
 #     """Generate content using selected AI model"""
@@ -541,22 +578,172 @@ def stop_processing():
 #     else:
 #         raise ValueError(f"Model ID {model_id} không được hỗ trợ")
 
+# def generate_content(model_id, prompt, keyword):
+#     """Generate content using selected AI model with chunking for longer output"""
+#     # Phần 1: Tạo outline và phần giới thiệu
+#     outline_prompt = f"""
+#     {prompt}
+    
+#     Hãy tạo một bố cục chi tiết cho bài viết về chủ đề "{keyword}" với:
+#     1. Phần giới thiệu chi tiết (khoảng 300 từ) giới thiệu về chủ đề và tại sao nó quan trọng
+#     2. ít nhât 8-10 tiêu đề chính (<h2>) với mô tả ngắn về nội dung của mỗi phần
+#     3. ít nhất 3-4 tiêu đề phụ (<h3>) cho mỗi tiêu đề chính
+    
+#     Format phản hồi:
+#     - Phần giới thiệu phải là đoạn văn HTML hoàn chỉnh với thẻ <p>
+#     - Mỗi tiêu đề chính phải sử dụng thẻ <h2>
+#     - Mỗi tiêu đề phụ phải sử dụng thẻ <h3>
+#     - Thêm mô tả ngắn cho mỗi tiêu đề để tôi hiểu nội dung sẽ bao gồm những gì
+    
+#     VUI LÒNG GIỮ NGUYÊN TẤT CẢ CÁC THẺ HTML.
+#     """
+    
+#     update_log("Đang tạo bố cục và phần giới thiệu...")
+#     outline_content = generate_content_with_model(model_id, outline_prompt)
+    
+#     # Phân tích outline để chia thành hai nửa
+#     soup = BeautifulSoup(outline_content, 'html.parser')
+#     h2_tags = soup.find_all('h2')
+    
+#     # Nếu không tìm thấy thẻ h2, thử phân tích dựa trên dòng
+#     if not h2_tags:
+#         update_log("Không tìm đủ thẻ H2 trong bố cục, thử phân tích văn bản...")
+#         lines = outline_content.split('\n')
+#         headings = []
+#         for line in lines:
+#             if '<h2>' in line:
+#                 headings.append(line.strip())
+        
+#         if len(headings) < 4:
+#             update_log("Không thể phân tích bố cục, thử tạo lại...")
+#             return generate_content(model_id, prompt, keyword)  # Thử lại
+    
+#     # Tìm vị trí giữa để chia outline thành hai phần
+#     middle_index = len(h2_tags) // 2
+#     first_half_h2s = h2_tags[:middle_index]
+#     second_half_h2s = h2_tags[middle_index:]
+    
+#     # Trích xuất nội dung giới thiệu
+#     introduction = ""
+#     intro_p = soup.find('p')
+#     if intro_p:
+#         introduction = str(intro_p)
+#     else:
+#         # Nếu không tìm thấy thẻ p, lấy nội dung đầu tiên trước thẻ h2 đầu tiên
+#         for element in soup.contents:
+#             if element.name != 'h2' and str(element).strip():
+#                 introduction += str(element)
+#             else:
+#                 break
+    
+#     # Phần 2: Phát triển chi tiết nửa đầu của outline
+#     first_half_titles = [h2.text.strip() for h2 in first_half_h2s]
+#     first_half_prompt = f"""
+#     {prompt}
+    
+#     Hãy phát triển chi tiết nửa đầu của bài viết về "{keyword}" với những tiêu đề sau:
+    
+#     {', '.join(first_half_titles)}
+    
+#     Yêu cầu:
+#     1. Bắt đầu với phần giới thiệu đã có (KHÔNG viết lại phần giới thiệu)
+#     2. Dành ít nhất 500-700 từ cho mỗi tiêu đề chính
+#     3. Sử dụng ít nhất 3-4 tiêu đề phụ (<h3>) cho mỗi tiêu đề chính
+#     4. Bao gồm ví dụ cụ thể, dữ liệu, và phân tích chuyên sâu
+#     5. Dùng các thẻ <p> cho đoạn văn, <ul><li> cho danh sách, <strong> để nhấn mạnh
+    
+#     VUI LÒNG GIỮ NGUYÊN TẤT CẢ CÁC THẺ HTML NHƯ <h2>, <h3>, <p>, <ul>, <li>, <strong> TRONG BÀI VIẾT.
+#     """
+    
+#     update_log("Đang phát triển nửa đầu của bài viết...")
+#     first_half_content = generate_content_with_model(model_id, first_half_prompt)
+    
+#     # Phần 3: Phát triển chi tiết nửa sau của outline và kết luận
+#     second_half_titles = [h2.text.strip() for h2 in second_half_h2s]
+#     second_half_prompt = f"""
+#     {prompt}
+    
+#     Hãy phát triển chi tiết nửa sau của bài viết về "{keyword}" với những tiêu đề sau:
+    
+#     {', '.join(second_half_titles)}
+    
+#     Yêu cầu:
+#     1. Tiếp tục từ nửa đầu đã được phát triển (không lặp lại phần giới thiệu)
+#     2. Dành ít nhất 5-700 từ cho mỗi tiêu đề chính
+#     3. Sử dụng ít nhất 3-4 tiêu đề phụ (<h3>) cho mỗi tiêu đề chính
+#     4. Bao gồm ví dụ cụ thể, dữ liệu, và phân tích chuyên sâu
+#     5. Dùng các thẻ <p> cho đoạn văn, <ul><li> cho danh sách, <strong> để nhấn mạnh
+#     KHÔNG viết phần kết luận. Phần kết luận sẽ được tạo riêng.
+#     VUI LÒNG GIỮ NGUYÊN TẤT CẢ CÁC THẺ HTML NHƯ <h2>, <h3>, <p>, <ul>, <li>, <strong> TRONG BÀI VIẾT.
+#     """
+    
+#     update_log("Đang phát triển nửa sau của bài viết...")
+#     second_half_content = generate_content_with_model(model_id, second_half_prompt)
+    
+
+#     conclusion_prompt = f"""
+#     {prompt}
+    
+#     Hãy viết một phần kết luận chi tiết về "{keyword}" dựa trên những tiêu đề chính đã được phát triển:
+    
+#     Tiêu đề nửa đầu: {', '.join(first_half_titles)}
+#     Tiêu đề nửa sau: {', '.join(second_half_titles)}
+    
+#     Yêu cầu chi tiết cho phần kết luận:
+#     1. Tiêu đề phần kết luận phải sử dụng thẻ <h2>Kết luận</h2>
+#     2. Độ dài phần kết luận phải từ 300-500 từ
+#     3. Phần kết luận phải bao gồm:
+#        - Tóm tắt ngắn gọn nhưng đầy đủ các điểm chính đã được đề cập trong bài viết
+#        - Kết nối các ý tưởng và khái niệm lại với nhau một cách mạch lạc
+#        - Câu cuối phải gây ấn tượng mạnh, thúc đẩy người đọc suy nghĩ hoặc hành động
+#     4. Sử dụng thẻ <p> cho các đoạn văn và <strong> để nhấn mạnh các điểm quan trọng
+    
+#     VUI LÒNG GIỮ NGUYÊN TẤT CẢ CÁC THẺ HTML.
+#     """
+    
+#     update_log("Đang tạo phần kết luận chi tiết của bài viết...")
+#     conclusion_content = generate_content_with_model(model_id, conclusion_prompt)
+    
+#     # Kết hợp nội dung
+#     update_log("Đang kết hợp các phần nội dung...")
+    
+#     # Xử lý nửa đầu
+#     first_half_soup = BeautifulSoup(first_half_content, 'html.parser')
+#     intro_in_first_half = first_half_soup.find('p')
+#     if intro_in_first_half:
+#         intro_in_first_half.decompose()  # Loại bỏ phần giới thiệu trùng lặp nếu có
+    
+#     # Kết hợp nội dung với định dạng HTML
+#     full_content = f"""
+#     {introduction}
+    
+#     {str(first_half_soup)}
+    
+#     {second_half_content}
+
+#     {conclusion_content}
+#     """
+    
+#     update_log("Hoàn thành tạo nội dung!")
+#     return full_content
+
 def generate_content(model_id, prompt, keyword):
-    """Generate content using selected AI model with chunking for longer output"""
+    """Generate content using selected AI model with 4 sections and improved prompts"""
+    
     # Phần 1: Tạo outline và phần giới thiệu
     outline_prompt = f"""
     {prompt}
     
     Hãy tạo một bố cục chi tiết cho bài viết về chủ đề "{keyword}" với:
-    1. Phần giới thiệu chi tiết (khoảng 300 từ) giới thiệu về chủ đề và tại sao nó quan trọng
-    2. ít nhât 8-10 tiêu đề chính (<h2>) với mô tả ngắn về nội dung của mỗi phần
-    3. ít nhất 3-4 tiêu đề phụ (<h3>) cho mỗi tiêu đề chính
+    1. Phần giới thiệu chi tiết (khoảng 300 từ) giới thiệu về chủ đề và tại sao nó quan trọng.
+    2. Ít nhất 8-10 tiêu đề chính (<h2>) với mô tả ngắn về nội dung của mỗi phần.
+    3. Ít nhất 3-4 tiêu đề phụ (<h3>) cho mỗi tiêu đề chính.
     
     Format phản hồi:
-    - Phần giới thiệu phải là đoạn văn HTML hoàn chỉnh với thẻ <p>
-    - Mỗi tiêu đề chính phải sử dụng thẻ <h2>
-    - Mỗi tiêu đề phụ phải sử dụng thẻ <h3>
-    - Thêm mô tả ngắn cho mỗi tiêu đề để tôi hiểu nội dung sẽ bao gồm những gì
+    - Phần giới thiệu phải là đoạn văn HTML hoàn chỉnh với thẻ <p>.
+    - Mỗi tiêu đề chính phải sử dụng thẻ <h2>.
+    - Mỗi tiêu đề phụ phải sử dụng thẻ <h3>.
+    - Thêm mô tả ngắn cho mỗi tiêu đề để tôi hiểu nội dung sẽ bao gồm những gì.
     
     VUI LÒNG GIỮ NGUYÊN TẤT CẢ CÁC THẺ HTML.
     """
@@ -564,27 +751,18 @@ def generate_content(model_id, prompt, keyword):
     update_log("Đang tạo bố cục và phần giới thiệu...")
     outline_content = generate_content_with_model(model_id, outline_prompt)
     
-    # Phân tích outline để chia thành hai nửa
+    # Phân tích outline để chia thành các phần
     soup = BeautifulSoup(outline_content, 'html.parser')
     h2_tags = soup.find_all('h2')
     
-    # Nếu không tìm thấy thẻ h2, thử phân tích dựa trên dòng
-    if not h2_tags:
-        update_log("Không tìm đủ thẻ H2 trong bố cục, thử phân tích văn bản...")
-        lines = outline_content.split('\n')
-        headings = []
-        for line in lines:
-            if '<h2>' in line:
-                headings.append(line.strip())
-        
-        if len(headings) < 4:
-            update_log("Không thể phân tích bố cục, thử tạo lại...")
-            return generate_content(model_id, prompt, keyword)  # Thử lại
+    if len(h2_tags) < 4:
+        update_log("Không thể phân tích bố cục, thử tạo lại...")
+        return generate_content(model_id, prompt, keyword)  # Thử lại
     
-    # Tìm vị trí giữa để chia outline thành hai phần
-    middle_index = len(h2_tags) // 2
-    first_half_h2s = h2_tags[:middle_index]
-    second_half_h2s = h2_tags[middle_index:]
+    # Chia outline thành 4 phần
+    quarter_index = len(h2_tags) // 2
+    first_quarter_h2s = h2_tags[:quarter_index]
+    second_quarter_h2s = h2_tags[quarter_index:quarter_index * 2]
     
     # Trích xuất nội dung giới thiệu
     introduction = ""
@@ -592,100 +770,71 @@ def generate_content(model_id, prompt, keyword):
     if intro_p:
         introduction = str(intro_p)
     else:
-        # Nếu không tìm thấy thẻ p, lấy nội dung đầu tiên trước thẻ h2 đầu tiên
         for element in soup.contents:
             if element.name != 'h2' and str(element).strip():
                 introduction += str(element)
             else:
                 break
     
-    # Phần 2: Phát triển chi tiết nửa đầu của outline
-    first_half_titles = [h2.text.strip() for h2 in first_half_h2s]
-    first_half_prompt = f"""
-    {prompt}
+    # Phần 2: Phát triển chi tiết từng phần của bài viết
+    def develop_section(h2_tags, section_name):
+        titles = [h2.text.strip() for h2 in h2_tags]
+        section_prompt = f"""
+        {prompt}
+        
+        Hãy phát triển chi tiết {section_name} của bài viết về "{keyword}" với những tiêu đề sau:
+        
+        {', '.join(titles)}
+        
+        Yêu cầu:
+        1. Dành ít nhất 500-700 từ cho mỗi tiêu đề chính.
+        2. Sử dụng ít nhất 3-4 tiêu đề phụ (<h3>) cho mỗi tiêu đề chính.
+        3. Bao gồm ví dụ cụ thể, dữ liệu, và phân tích chuyên sâu.
+        4. Dùng các thẻ <p> cho đoạn văn, <ul><li> cho danh sách, <strong> để nhấn mạnh.
+        5. Loại bỏ các đoạn văn mặc định không tự nhiên, đầu ra sẽ chỉ chứa nội dung liên quan, không sử dụng các ký tự như # ở đầu dòng.
+        
+        VUI LÒNG GIỮ NGUYÊN TẤT CẢ CÁC THẺ HTML.
+        """
+        return generate_content_with_model(model_id, section_prompt)
     
-    Hãy phát triển chi tiết nửa đầu của bài viết về "{keyword}" với những tiêu đề sau:
+    update_log("Đang phát triển phần 1 của thân bài...")
+    first_section_content = develop_section(first_quarter_h2s, "phần đầu tiên")
     
-    {', '.join(first_half_titles)}
+    update_log("Đang phát triển phần 2 của thân bài...")
+    second_section_content = develop_section(second_quarter_h2s, "phần thứ hai")
     
-    Yêu cầu:
-    1. Bắt đầu với phần giới thiệu đã có (KHÔNG viết lại phần giới thiệu)
-    2. Dành ít nhất 500-700 từ cho mỗi tiêu đề chính
-    3. Sử dụng ít nhất 3-4 tiêu đề phụ (<h3>) cho mỗi tiêu đề chính
-    4. Bao gồm ví dụ cụ thể, dữ liệu, và phân tích chuyên sâu
-    5. Dùng các thẻ <p> cho đoạn văn, <ul><li> cho danh sách, <strong> để nhấn mạnh
-    
-    VUI LÒNG GIỮ NGUYÊN TẤT CẢ CÁC THẺ HTML NHƯ <h2>, <h3>, <p>, <ul>, <li>, <strong> TRONG BÀI VIẾT.
-    """
-    
-    update_log("Đang phát triển nửa đầu của bài viết...")
-    first_half_content = generate_content_with_model(model_id, first_half_prompt)
-    
-    # Phần 3: Phát triển chi tiết nửa sau của outline và kết luận
-    second_half_titles = [h2.text.strip() for h2 in second_half_h2s]
-    second_half_prompt = f"""
-    {prompt}
-    
-    Hãy phát triển chi tiết nửa sau của bài viết về "{keyword}" với những tiêu đề sau:
-    
-    {', '.join(second_half_titles)}
-    
-    Yêu cầu:
-    1. Tiếp tục từ nửa đầu đã được phát triển (không lặp lại phần giới thiệu)
-    2. Dành ít nhất 5-700 từ cho mỗi tiêu đề chính
-    3. Sử dụng ít nhất 3-4 tiêu đề phụ (<h3>) cho mỗi tiêu đề chính
-    4. Bao gồm ví dụ cụ thể, dữ liệu, và phân tích chuyên sâu
-    5. Dùng các thẻ <p> cho đoạn văn, <ul><li> cho danh sách, <strong> để nhấn mạnh
-    KHÔNG viết phần kết luận. Phần kết luận sẽ được tạo riêng.
-    VUI LÒNG GIỮ NGUYÊN TẤT CẢ CÁC THẺ HTML NHƯ <h2>, <h3>, <p>, <ul>, <li>, <strong> TRONG BÀI VIẾT.
-    """
-    
-    update_log("Đang phát triển nửa sau của bài viết...")
-    second_half_content = generate_content_with_model(model_id, second_half_prompt)
-    
-
+    # Phần 3: Kết bài
     conclusion_prompt = f"""
     {prompt}
     
-    Hãy viết một phần kết luận chi tiết về "{keyword}" dựa trên những tiêu đề chính đã được phát triển:
-    
-    Tiêu đề nửa đầu: {', '.join(first_half_titles)}
-    Tiêu đề nửa sau: {', '.join(second_half_titles)}
-    
-    Yêu cầu chi tiết cho phần kết luận:
-    1. Tiêu đề phần kết luận phải sử dụng thẻ <h2>Kết luận</h2>
-    2. Độ dài phần kết luận phải từ 300-500 từ
-    3. Phần kết luận phải bao gồm:
-       - Tóm tắt ngắn gọn nhưng đầy đủ các điểm chính đã được đề cập trong bài viết
-       - Kết nối các ý tưởng và khái niệm lại với nhau một cách mạch lạc
-       - Câu cuối phải gây ấn tượng mạnh, thúc đẩy người đọc suy nghĩ hoặc hành động
-    4. Sử dụng thẻ <p> cho các đoạn văn và <strong> để nhấn mạnh các điểm quan trọng
+    Hãy viết một phần kết luận ngắn gọn về "{keyword}" với các yêu cầu sau:
+    1. Tiêu đề phần kết luận phải sử dụng thẻ <h2>Kết luận</h2>.
+    2. Độ dài phần kết luận chỉ gồm 2 đoạn văn dài.
+    3. Tóm tắt ngắn gọn các điểm chính đã được đề cập trong bài viết.
+    4. Kết nối các ý tưởng và khái niệm lại với nhau một cách mạch lạc.
+    5. Câu cuối phải gây ấn tượng mạnh, thúc đẩy người đọc suy nghĩ hoặc hành động.
     
     VUI LÒNG GIỮ NGUYÊN TẤT CẢ CÁC THẺ HTML.
     """
     
-    update_log("Đang tạo phần kết luận chi tiết của bài viết...")
+    update_log("Đang tạo phần kết luận...")
     conclusion_content = generate_content_with_model(model_id, conclusion_prompt)
     
     # Kết hợp nội dung
     update_log("Đang kết hợp các phần nội dung...")
-    
-    # Xử lý nửa đầu
-    first_half_soup = BeautifulSoup(first_half_content, 'html.parser')
-    intro_in_first_half = first_half_soup.find('p')
-    if intro_in_first_half:
-        intro_in_first_half.decompose()  # Loại bỏ phần giới thiệu trùng lặp nếu có
-    
-    # Kết hợp nội dung với định dạng HTML
     full_content = f"""
     {introduction}
     
-    {str(first_half_soup)}
+    {first_section_content}
     
-    {second_half_content}
-
+    {second_section_content}
+    
+    
     {conclusion_content}
     """
+    
+    # Xử lý chuyển đổi tiêu đề markdown `##` thành thẻ HTML `<h2>`
+    full_content = full_content.replace("##", "<h2>").replace("###", "<h3>")
     
     update_log("Hoàn thành tạo nội dung!")
     return full_content
@@ -1064,6 +1213,12 @@ def load_data():
             
             # Posting mode
             posting_mode_var.set(config["posting"].get("mode", 1))
+
+            chrome_profiles = config["model_settings"].get("chrome_profiles", ["", "", "", "", ""])
+            for i, profile in enumerate(chrome_profiles):
+                if i < len(chrome_profile_entries):
+                    chrome_profile_entries[i].delete(0, tk.END)
+                    chrome_profile_entries[i].insert(0, profile)
             
             update_log(f"Đã tải cấu hình từ file: {os.path.basename(file_path)}")
         else:
@@ -1176,10 +1331,6 @@ def load_saved_data():
         if os.path.exists("wordpress_ai_config.json"):
             with open("wordpress_ai_config.json", "r", encoding="utf-8") as f:
                 config = json.load(f)
-                
-            # Existing code remains the same
-            # ...
-            
             # Add loading of chrome profiles
             chrome_profiles = config["model_settings"].get("chrome_profiles", ["", "", "", "", ""])
             for i, profile in enumerate(chrome_profiles):
