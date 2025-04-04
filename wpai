@@ -209,8 +209,11 @@ def validate_required_apis():
         if image_model == 1 and not openai_entry.get().strip():
             if "OpenAI" not in missing_apis:
                 missing_apis.append("OpenAI")
-        elif image_model == 2 and not gemini_entry.get().strip():
-            missing_apis.append("Gemini")
+        elif image_model == 2:
+            missing_apis.append("Gemini Profile Path")
+            for i in chrome_profile_entries:
+                if chrome_profile_entries[i].get().strip():
+                    missing_apis.remove("Gemini Profile Path")
         elif image_model == 3 and not deeseek_entry.get().strip():
             if "Deepseek" not in missing_apis:
                 missing_apis.append("Deepseek")
@@ -342,6 +345,233 @@ async def refresh_gemini_session():
     else:
         return False
 
+def process_internal_linking(wordpress_url, username, password, post_id, post_content, post_link, keyword, excel_file, row_idx):
+    """Process internal linking for a WordPress post"""
+    update_log("Đang xử lý internal linking cho bài viết...")
+    
+    try:
+        # Parse the HTML content
+        soup = BeautifulSoup(post_content, 'html.parser')
+        content_text = str(soup)
+        modified = False
+        
+        # Format keyword với chữ cái đầu viết hoa
+        capitalized_keyword = keyword.capitalize()
+        title_case_keyword = keyword.title()
+        
+        # Step 1: Insert post's own link into its keyword in the content
+        # Thử tìm các biến thể khác nhau của keyword trong nội dung
+        text_elements = soup.find_all(text=True)
+        keyword_found = False
+        text_elements = soup.find_all(text=True)
+        
+        for element in text_elements:
+            # Bỏ qua các text node trong các thẻ script, style, hoặc đã là thẻ <a>
+            if element.parent.name in ['script', 'style', 'a']:
+                continue
+            
+            # Tạo một pattern với re.IGNORECASE để không phân biệt chữ hoa/thường
+            # Tìm kiếm chính xác từ keyword (với ranh giới từ)
+            pattern = r'\b' + re.escape(keyword) + r'\b'
+            
+            # Tìm từ khóa trong phần text
+            match = re.search(pattern, element, re.IGNORECASE)
+            if match:
+                # Lấy từ khóa chính xác như trong văn bản (giữ nguyên cách viết hoa/thường)
+                found_keyword = match.group(0)
+                
+                # Thay thế từ khóa bằng link, giữ nguyên cách viết hoa/thường
+                new_text = re.sub(pattern, 
+                                 f'<a href="{post_link}">{found_keyword}</a>', 
+                                 element, 
+                                 count=1, 
+                                 flags=re.IGNORECASE)
+                
+                # Tạo một đối tượng mới từ HTML đã thay thế
+                new_fragment = BeautifulSoup(new_text, 'html.parser')
+                
+                # Thay thế element cũ bằng element mới
+                element.replace_with(new_fragment)
+                
+                modified = True
+                update_log(f"Đã thêm self-link cho từ khóa: {found_keyword}")
+                keyword_found = True
+                break
+        
+        if not keyword_found:
+            update_log(f"Từ khóa {keyword} không có trong nội dung bài viết")
+
+        content_text = str(soup)
+        # Step 2: Load workbook to get keywords and their links
+        wb = openpyxl.load_workbook(excel_file)
+        ws = wb.active
+        
+        # Collect all available keywords and internal links (excluding current keyword)
+        keywords_and_links = []
+        for r in range(2, ws.max_row + 1):
+            kw = ws.cell(row=r, column=1).value
+            internal_link = ws.cell(row=r, column=7).value
+            
+            if kw and kw.strip() and internal_link and internal_link.strip() and kw.strip().lower() != keyword.lower():
+                keywords_and_links.append((kw.strip(), internal_link.strip()))
+        
+        if not keywords_and_links:
+            update_log("Không tìm thấy từ khóa nào phù hợp để tạo internal link")
+            # Update Excel file with post link
+            ws.cell(row=row_idx, column=6, value=post_link)
+            wb.save(excel_file)
+            return
+        
+        # Step 3: Select ONE random keyword
+        random_kw, random_link = keywords_and_links[int(time.time()) % len(keywords_and_links)]
+        
+        # Format random keyword với chữ cái đầu viết hoa
+        # Sửa phần Step 4: Try to insert the internal link trong hàm process_internal_linking
+        capitalized_random_kw = random_kw.capitalize()
+        title_case_random_kw = random_kw.title()
+        random_kw_found = False
+        soup = BeautifulSoup(content_text, 'html.parser')  # Tạo đối tượng BeautifulSoup mới
+        text_elements = soup.find_all(text=True)
+
+        for element in text_elements:
+            # Bỏ qua các text node trong các thẻ script, style, hoặc đã là thẻ <a>
+            if element.parent.name in ['script', 'style', 'a']:
+                continue
+            
+            # Tạo pattern cho từng biến thể của từ khóa random
+            for kw_variant in [random_kw, capitalized_random_kw, title_case_random_kw]:
+                pattern = r'\b' + re.escape(kw_variant) + r'\b'
+                
+                # Tìm từ khóa trong phần text
+                match = re.search(pattern, element, re.IGNORECASE)
+                if match:
+                    # Lấy từ khóa chính xác như trong văn bản (giữ nguyên cách viết hoa/thường)
+                    found_keyword = match.group(0)
+                    
+                    # Thay thế từ khóa bằng link, giữ nguyên cách viết hoa/thường
+                    new_text = re.sub(pattern, 
+                                f'<a href="{random_link}">{found_keyword}</a>', 
+                                element, 
+                                count=1, 
+                                flags=re.IGNORECASE)
+                    
+                    # Tạo một đối tượng mới từ HTML đã thay thế
+                    new_fragment = BeautifulSoup(new_text, 'html.parser')
+                    
+                    # Thay thế element cũ bằng element mới
+                    element.replace_with(new_fragment)
+                    
+                    modified = True
+                    update_log(f"Đã thêm internal link cho từ khóa: {found_keyword}")
+                    random_kw_found = True
+                    break
+            
+            if random_kw_found:
+                break
+
+        # Cập nhật content_text sau khi đã sửa đổi soup
+        if random_kw_found:
+            content_text = str(soup)
+                
+        if not random_kw_found:
+            # Keyword not found - use template text
+            # Get random text templates from entry fields
+            templates = []
+            if text_entry1.get().strip():
+                templates.append(text_entry1.get().strip())
+            if text_entry2.get().strip():
+                templates.append(text_entry2.get().strip())
+            if text_entry3.get().strip():
+                templates.append(text_entry3.get().strip())
+            
+            # Use default template if none provided
+            if not templates:
+                templates = ["Bạn có thể quan tâm", "Xem thêm", "Đọc thêm"]
+            
+            # Format the linked text as "random_text:từ khóa"
+            # Sử dụng title_case_random_kw để hiển thị từ khóa đẹp hơn
+            linked_keyword = f'<a href="{random_link}">{title_case_random_kw}</a>'
+            
+            # Get random number between min_links and max_links for number of text blocks to add
+            try:
+                min_links = int(number_entry1.get().strip() or "1")
+                max_links = int(number_entry2.get().strip() or "3")
+                if min_links > max_links:
+                    min_links, max_links = max_links, min_links
+                all_links = list(range(min_links, max_links + 1))
+                num_blocks = all_links[int(time.time()) % len(all_links)]
+            except ValueError:
+                num_blocks = 1
+            
+            update_log(f"Cần thêm {num_blocks} text block với internal link")
+            
+            # Get all h2 tags to insert before
+            h2_tags = soup.find_all('h2')
+            if len(h2_tags) > 1:
+                # Select headings from the middle to the end
+                mid_point = len(h2_tags) // 2
+                target_headings = h2_tags[mid_point:mid_point+num_blocks]
+                
+                blocks_added = 0
+                for heading in target_headings:
+                    if blocks_added >= num_blocks:
+                        break
+                    
+                    # Select random template
+                    template = templates[int(time.time()) % len(templates)]
+                    text_content = f"{template}: {linked_keyword}"
+                    
+                    # Create a new paragraph element
+                    new_p = soup.new_tag('p')
+                    new_p.string = ""  # Will be replaced with HTML content later
+                    
+                    # Insert it before the heading
+                    heading.insert_before(new_p)
+                    blocks_added += 1
+                
+                if blocks_added > 0:
+                    # Convert back to string with the new paragraphs
+                    content_text = str(soup)
+                    
+                    # Replace empty paragraphs with our content
+                    for _ in range(blocks_added):
+                        # Select random template each time
+                        template = templates[int(time.time()) % len(templates)]
+                        # Create text with format "random_text:từ khóa"
+                        text_content = f"{template}: {linked_keyword}"
+                        content_text = content_text.replace("<p></p>", f"<p>{text_content}</p>", 1)
+                    modified = True
+                    update_log(f"Đã thêm {blocks_added} text block với internal link cho từ khóa: {title_case_random_kw}")
+            else:
+                update_log("Không tìm thấy đủ tiêu đề để thêm text block")
+        
+        # Phần còn lại của hàm giữ nguyên
+        if modified:
+            update_url = f"{wordpress_url}/wp-json/wp/v2/posts/{post_id}"
+            update_data = {'content': content_text}
+            
+            update_response = requests.post(
+                update_url,
+                auth=HTTPBasicAuth(username, password),
+                json=update_data
+            )
+            
+            if update_response.status_code == 200:
+                update_log("Cập nhật internal linking thành công.")
+                
+                # Update Excel file with post link
+                ws.cell(row=row_idx, column=6, value=post_link)
+                wb.save(excel_file)
+            else:
+                update_log(f"Không thể cập nhật internal linking: {update_response.status_code}")
+        else:
+            # Still update Excel file with post link even if content wasn't modified
+            ws.cell(row=row_idx, column=6, value=post_link)
+            wb.save(excel_file)
+            update_log("Không có internal link nào được thêm vào.")
+    
+    except Exception as e:
+        update_log(f"Lỗi khi xử lý internal linking: {str(e)}")
 def process_post_and_add_images(wordpress_url, username, password, post_id, post_content, image_model_id, max_images, folder_path):
     """Process a WordPress post and add generated images"""
     if max_images <= 0:
@@ -735,7 +965,7 @@ def generate_content(model_id, prompt, keyword):
     {prompt}
     
     Hãy tạo một bố cục chi tiết cho bài viết về chủ đề "{keyword}" với:
-    1. Phần giới thiệu chi tiết (khoảng 300 từ) giới thiệu về chủ đề và tại sao nó quan trọng.
+    1. Phần giới thiệu chi tiết (khoảng 300 từ) giới thiệu về chủ đề và tại sao nó quan trọng, không nhắc lại yêu cầu của tôi mà chỉ tập trung vào chủ đề.
     2. Ít nhất 8-10 tiêu đề chính (<h2>) với mô tả ngắn về nội dung của mỗi phần.
     3. Ít nhất 3-4 tiêu đề phụ (<h3>) cho mỗi tiêu đề chính.
     
@@ -760,9 +990,10 @@ def generate_content(model_id, prompt, keyword):
         return generate_content(model_id, prompt, keyword)  # Thử lại
     
     # Chia outline thành 4 phần
-    quarter_index = len(h2_tags) // 2
+    quarter_index = len(h2_tags) // 3
     first_quarter_h2s = h2_tags[:quarter_index]
     second_quarter_h2s = h2_tags[quarter_index:quarter_index * 2]
+    third_quarter_h2s = h2_tags[quarter_index * 2:quarter_index * 3]
     
     # Trích xuất nội dung giới thiệu
     introduction = ""
@@ -787,11 +1018,11 @@ def generate_content(model_id, prompt, keyword):
         {', '.join(titles)}
         
         Yêu cầu:
-        1. Dành ít nhất 500-700 từ cho mỗi tiêu đề chính.
-        2. Sử dụng ít nhất 3-4 tiêu đề phụ (<h3>) cho mỗi tiêu đề chính.
+        1. Dành ít nhất 500-600 từ cho mỗi tiêu đề chính.
+        2. Sử dụng ít nhất 2-3 tiêu đề phụ (<h3>) cho mỗi tiêu đề chính.
         3. Bao gồm ví dụ cụ thể, dữ liệu, và phân tích chuyên sâu.
         4. Dùng các thẻ <p> cho đoạn văn, <ul><li> cho danh sách, <strong> để nhấn mạnh.
-        5. Loại bỏ các đoạn văn mặc định không tự nhiên, đầu ra sẽ chỉ chứa nội dung liên quan, không sử dụng các ký tự như # ở đầu dòng.
+        5. Loại bỏ các đoạn văn mặc định không tự nhiên, đầu ra sẽ chỉ chứa nội dung định dạng html, đủ nội dung, nếu quá dài có thể dừng thay vì viết giữa chừng, không sử dụng các ký tự như # ở đầu dòng.
         
         VUI LÒNG GIỮ NGUYÊN TẤT CẢ CÁC THẺ HTML.
         """
@@ -799,9 +1030,27 @@ def generate_content(model_id, prompt, keyword):
     
     update_log("Đang phát triển phần 1 của thân bài...")
     first_section_content = develop_section(first_quarter_h2s, "phần đầu tiên")
+    if first_section_content.find('```html')==-1:
+        print("Không tìm thấy text html trong phần 1")
+        pass
+    else:
+        first_section_content = first_section_content.split('```html')[1].split('```')[0]
     
     update_log("Đang phát triển phần 2 của thân bài...")
     second_section_content = develop_section(second_quarter_h2s, "phần thứ hai")
+    if second_section_content.find('```html')==-1:
+        print("Không tìm thấy text html trong phần 2")
+        pass
+    else:
+        second_section_content = second_section_content.split('```html')[1].split('```')[0]
+
+    third_section_content = develop_section(third_quarter_h2s, "phần thứ ba")
+    if third_section_content.find('```html')==-1:
+        print("Không tìm thấy text html trong phần 3")
+        pass
+    else:
+        third_section_content = third_section_content.split('```html')[1].split('```')[0]
+
     
     # Phần 3: Kết bài
     conclusion_prompt = f"""
@@ -811,8 +1060,7 @@ def generate_content(model_id, prompt, keyword):
     1. Tiêu đề phần kết luận phải sử dụng thẻ <h2>Kết luận</h2>.
     2. Độ dài phần kết luận chỉ gồm 2 đoạn văn dài.
     3. Tóm tắt ngắn gọn các điểm chính đã được đề cập trong bài viết.
-    4. Kết nối các ý tưởng và khái niệm lại với nhau một cách mạch lạc.
-    5. Câu cuối phải gây ấn tượng mạnh, thúc đẩy người đọc suy nghĩ hoặc hành động.
+    4. Câu cuối phải gây ấn tượng mạnh, thúc đẩy người đọc suy nghĩ hoặc hành động.
     
     VUI LÒNG GIỮ NGUYÊN TẤT CẢ CÁC THẺ HTML.
     """
@@ -829,6 +1077,7 @@ def generate_content(model_id, prompt, keyword):
     
     {second_section_content}
     
+    {third_section_content}
     
     {conclusion_content}
     """
@@ -1105,6 +1354,21 @@ def start_processing():
                     # Update Excel status
                     status_value = 'Draft' if posting_mode_var.get() == 2 else 'Publish'
                     ws.cell(row=row_idx, column=5, value=status_value)
+                    ws.cell(row=row_idx, column=6, value=post_link)
+
+
+                    if toggle_var.get():
+                        process_internal_linking(
+                            wordpress_url,
+                            username,
+                            password,
+                            post_id,
+                            content,
+                            post_link,
+                            keyword,
+                            excel_file,
+                            row_idx
+                        )
                     
                     # Check if we need to add images
                     try:
@@ -1219,6 +1483,29 @@ def load_data():
                 if i < len(chrome_profile_entries):
                     chrome_profile_entries[i].delete(0, tk.END)
                     chrome_profile_entries[i].insert(0, profile)
+
+            if "internal_linking" in config:
+                # Toggle button
+                toggle_var.set(config["internal_linking"].get("enabled", False))
+                toggle_switch()  # Update toggle UI
+                
+                # Text templates
+                templates = config["internal_linking"].get("text_templates", ["", "", ""])
+                text_entry1.delete(0, tk.END)
+                text_entry1.insert(0, templates[0] if len(templates) > 0 else "")
+                
+                text_entry2.delete(0, tk.END)
+                text_entry2.insert(0, templates[1] if len(templates) > 1 else "")
+                
+                text_entry3.delete(0, tk.END)
+                text_entry3.insert(0, templates[2] if len(templates) > 2 else "")
+                
+                # Number entries
+                number_entry1.delete(0, tk.END)
+                number_entry1.insert(0, config["internal_linking"].get("min_links", ""))
+                
+                number_entry2.delete(0, tk.END)
+                number_entry2.insert(0, config["internal_linking"].get("max_links", ""))
             
             update_log(f"Đã tải cấu hình từ file: {os.path.basename(file_path)}")
         else:
@@ -1313,10 +1600,21 @@ def save_data():
         },
         "posting": {
             "mode": posting_mode_var.get()
+        },
+        # Thêm phần lưu cấu hình internal linking
+        "internal_linking": {
+            "enabled": toggle_var.get(),
+            "text_templates": [
+                text_entry1.get().strip(),
+                text_entry2.get().strip(),
+                text_entry3.get().strip()
+            ],
+            "min_links": number_entry1.get().strip(),
+            "max_links": number_entry2.get().strip()
         }
     }
     
-    # Rest of the function remains the same
+    # Lưu cấu hình
     try:
         with open("wordpress_ai_config.json", "w", encoding="utf-8") as f:
             json.dump(config, f, indent=4)
@@ -1324,19 +1622,82 @@ def save_data():
     except Exception as e:
         update_log(f"Lỗi khi lưu cấu hình: {str(e)}")
 
-# And update the load_saved_data function
 def load_saved_data():
     """Load saved configuration data"""
     try:
         if os.path.exists("wordpress_ai_config.json"):
             with open("wordpress_ai_config.json", "r", encoding="utf-8") as f:
                 config = json.load(f)
-            # Add loading of chrome profiles
+                
+            # Populate API fields
+            openai_entry.delete(0, tk.END)
+            openai_entry.insert(0, config["api_keys"].get("openai", ""))
+            
+            gemini_entry.delete(0, tk.END)
+            gemini_entry.insert(0, config["api_keys"].get("gemini", ""))
+            
+            claude_entry.delete(0, tk.END)
+            claude_entry.insert(0, config["api_keys"].get("claude", ""))
+            
+            deeseek_entry.delete(0, tk.END)
+            deeseek_entry.insert(0, config["api_keys"].get("deepseek", ""))
+            
+            # Set model selections
+            model_content_var.set(config["model_settings"].get("content_model", 0))
+            model_image_var.set(config["model_settings"].get("image_model", 0))
+            
+            image_number_entry.delete(0, tk.END)
+            image_number_entry.insert(0, config["model_settings"].get("images_per_post", ""))
+            
+            folder_entry.delete(0, tk.END)
+            folder_entry.insert(0, config["model_settings"].get("images_folder", ""))
+            
+            # WordPress settings
+            url_entry.delete(0, tk.END)
+            url_entry.insert(0, config["wordpress"].get("url", ""))
+            
+            username_entry.delete(0, tk.END)
+            username_entry.insert(0, config["wordpress"].get("username", ""))
+            
+            password_entry.delete(0, tk.END)
+            password_entry.insert(0, config["wordpress"].get("password", ""))
+            
+            data_input_entry.delete(0, tk.END)
+            data_input_entry.insert(0, config["wordpress"].get("data_input", ""))
+            
+            # Posting mode
+            posting_mode_var.set(config["posting"].get("mode", 1))
+
+            # Chrome profiles
             chrome_profiles = config["model_settings"].get("chrome_profiles", ["", "", "", "", ""])
             for i, profile in enumerate(chrome_profiles):
                 if i < len(chrome_profile_entries):
                     chrome_profile_entries[i].delete(0, tk.END)
                     chrome_profile_entries[i].insert(0, profile)
+                    
+            # Load internal linking settings if available
+            if "internal_linking" in config:
+                # Toggle button
+                toggle_var.set(config["internal_linking"].get("enabled", False))
+                toggle_switch()  # Update toggle UI
+                
+                # Text templates
+                templates = config["internal_linking"].get("text_templates", ["", "", ""])
+                text_entry1.delete(0, tk.END)
+                text_entry1.insert(0, templates[0] if len(templates) > 0 else "")
+                
+                text_entry2.delete(0, tk.END)
+                text_entry2.insert(0, templates[1] if len(templates) > 1 else "")
+                
+                text_entry3.delete(0, tk.END)
+                text_entry3.insert(0, templates[2] if len(templates) > 2 else "")
+                
+                # Number entries
+                number_entry1.delete(0, tk.END)
+                number_entry1.insert(0, config["internal_linking"].get("min_links", ""))
+                
+                number_entry2.delete(0, tk.END)
+                number_entry2.insert(0, config["internal_linking"].get("max_links", ""))
             
             update_log("Cấu hình đã được tải thành công!")
     except Exception as e:
@@ -1609,7 +1970,7 @@ def choose_folder():
 
 root = tk.Tk()
 root.title("Post WordPress")
-root.geometry("1200x850")
+root.geometry("1200x750")
 
 # API Section
 api_frame = tk.Frame(root, bg="#f0f0f0", bd=2, relief="groove")
@@ -1759,7 +2120,7 @@ tk.Radiobutton(category_frame, text="Public (công khai)", bg="#f0f0f0", variabl
 tk.Radiobutton(category_frame, text="Draf (nháp)", bg="#f0f0f0", variable=posting_mode_var, value=2).place(x=280, y=130)
 
 # Action Buttons and Log Section
-action_log_frame = tk.Frame(root, bg="#f0f0f0", bd=2, relief="groove")
+action_log_frame = tk.Frame(root, bg="#f0f0f0", bd=2)
 action_log_frame.place(x=30, y=490, width=1120, height=180)
 
 # Action Buttons and Log Section
@@ -1784,6 +2145,43 @@ for i in range(5):
     chrome_profile_entries.append(entry)
     tk.Button(chrome_profiles_frame, text="Browse", command=lambda idx=i: choose_chrome_profile(idx)).place(x=600, y=8 + i*22)
 
+# Tạo một khung mới bên cạnh phần browser profile
+additional_frame = tk.Frame(root, bg="#f0f0f0", bd=2)
+additional_frame.place(x=700, y=310, width=400, height=100)  # Đặt cạnh phần browser profile
+text_entry1 = tk.Entry(additional_frame, width=30)
+text_entry1.place(x=100, y=10)
+text_entry2 = tk.Entry(additional_frame, width=30)
+text_entry2.place(x=100, y=40)
+text_entry3 = tk.Entry(additional_frame, width=30)
+text_entry3.place(x=100, y=70)
+
+def toggle_switch():
+    if toggle_var.get():
+        toggle_canvas.itemconfig(toggle_circle, fill="green")
+        toggle_canvas.coords(toggle_circle, 30, 5, 50, 25)  # Gạt sang phải
+    else:
+        toggle_canvas.itemconfig(toggle_circle, fill="red")
+        toggle_canvas.coords(toggle_circle, 5, 5, 25, 25)  # Gạt sang trái
+
+toggle_var = tk.BooleanVar(value=False)
+toggle_canvas = tk.Canvas(additional_frame, width=55, height=30, bg="#f0f0f0", highlightthickness=0)
+toggle_canvas.place(x=10, y=40)
+
+# Vẽ nền và hình tròn
+toggle_canvas.create_rectangle(5, 5, 50, 25, fill="#ccc", outline="")
+toggle_circle = toggle_canvas.create_oval(5, 5, 25, 25, fill="red", outline="")
+
+# Liên kết sự kiện click để chuyển đổi trạng thái
+toggle_canvas.bind("<Button-1>", lambda event: toggle_var.set(not toggle_var.get()) or toggle_switch())
+
+# Hai ô nhập số
+tk.Label(additional_frame, text="Số 1:", bg="#f0f0f0").place(x=200, y=100)
+number_entry1 = tk.Entry(additional_frame, width=5)
+number_entry1.place(x=300, y=40)
+
+tk.Label(additional_frame, text="Số 2:", bg="#f0f0f0").place(x=300, y=100)
+number_entry2 = tk.Entry(additional_frame, width=5)
+number_entry2.place(x=350, y=40)
 # Update the existing frame positions
 wordpress_category_frame.place(x=30, y=440, width=1120, height=180)
 action_log_frame.place(x=30, y=630, width=1120, height=180)
@@ -1803,12 +2201,12 @@ tk.Button(action_frame, text="BẮT ĐẦU", bg="green", width=16, command=start
 tk.Button(action_frame, text="TEST ĐĂNG", bg="yellow", width=16, command=test_post).place(x=180, y=20)
 tk.Button(action_frame, text="DỪNG CHẠY", bg="red", width=16, command=stop_processing).place(x=20, y=60)
 tk.Button(action_frame, text="LƯU DỮ LIỆU", bg="orange", width=16, command=save_data).place(x=180, y=60)
-tk.Button(action_frame, text="TẢI DỮ LIỆU", bg="lightblue", width=16, command=load_data).place(x=180, y=100)
-tk.Button(action_frame, text="THOÁT PHẦN MỀM", bg="pink", width=16).place(x=20, y=100)
+tk.Button(action_frame, text="TẢI DỮ LIỆU", bg="lightblue", width=16, command=load_data).place(x=340, y=20)
+tk.Button(action_frame, text="THOÁT PHẦN MỀM", bg="pink", width=16).place(x=340, y=60)
 
 # Log Section
 log_text = tk.Text(action_frame, state='disabled', bg="#f0f0f0", wrap='word')
-log_text.place(x=600, y=10, width=450, height=120)
+log_text.place(x=600, y=10, width=450, height=80)
 update_log("Lưu ý: Không mở file excel trong thời gian chạy, tránh bị lỗi lưu data")
 
 root.mainloop()
