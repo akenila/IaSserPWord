@@ -212,7 +212,7 @@ def validate_required_apis():
         elif image_model == 2:
             missing_apis.append("Gemini Profile Path")
             for i in chrome_profile_entries:
-                if chrome_profile_entries[i].get().strip():
+                if i.get().strip():
                     missing_apis.remove("Gemini Profile Path")
         elif image_model == 3 and not deeseek_entry.get().strip():
             if "Deepseek" not in missing_apis:
