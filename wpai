@@ -113,7 +113,18 @@ async def init_gemini_client(profile_path):
 async def generate_image_with_gemini(prompt, output_path, filename):
     """Generate image using Gemini Web API"""
     global gemini_client, current_profile_index, profile_init_failures, previous_chat_metadata  # Add previous_chat_metadata
+    valid_profiles = []
+    for i, entry in enumerate(chrome_profile_entries):
+        if entry.get().strip():
+            valid_profiles.append(i)
     
+    if not valid_profiles:
+        update_log("Error: No valid Chrome profiles found")
+        return None
+    
+    # Make sure we're using a valid profile index
+    if current_profile_index not in valid_profiles:
+        current_profile_index = valid_profiles[0]
     if not gemini_client:
         # Try to initialize with current profile
         profile_path = chrome_profile_entries[current_profile_index].get().strip()
@@ -363,11 +374,10 @@ def process_internal_linking(wordpress_url, username, password, post_id, post_co
         # Thử tìm các biến thể khác nhau của keyword trong nội dung
         text_elements = soup.find_all(text=True)
         keyword_found = False
-        text_elements = soup.find_all(text=True)
         
         for element in text_elements:
             # Bỏ qua các text node trong các thẻ script, style, hoặc đã là thẻ <a>
-            if element.parent.name in ['script', 'style', 'a']:
+            if element.parent is None or element.parent.name in ['script', 'style', 'a']:
                 continue
             
             # Tạo một pattern với re.IGNORECASE để không phân biệt chữ hoa/thường
@@ -430,48 +440,40 @@ def process_internal_linking(wordpress_url, username, password, post_id, post_co
         capitalized_random_kw = random_kw.capitalize()
         title_case_random_kw = random_kw.title()
         random_kw_found = False
-        soup = BeautifulSoup(content_text, 'html.parser')  # Tạo đối tượng BeautifulSoup mới
-        text_elements = soup.find_all(text=True)
-
         for element in text_elements:
             # Bỏ qua các text node trong các thẻ script, style, hoặc đã là thẻ <a>
-            if element.parent.name in ['script', 'style', 'a']:
+            if element.parent is None or element.parent.name in ['script', 'style', 'a']:
                 continue
             
-            # Tạo pattern cho từng biến thể của từ khóa random
-            for kw_variant in [random_kw, capitalized_random_kw, title_case_random_kw]:
-                pattern = r'\b' + re.escape(kw_variant) + r'\b'
+            # Tạo một pattern với re.IGNORECASE để không phân biệt chữ hoa/thường
+            pattern = r'\b' + re.escape(random_kw) + r'\b'
+            
+            # Tìm từ khóa trong phần text
+            match = re.search(pattern, element, re.IGNORECASE)
+            if match:
+                # Lấy từ khóa chính xác như trong văn bản (giữ nguyên cách viết hoa/thường)
+                found_keyword = match.group(0)
                 
-                # Tìm từ khóa trong phần text
-                match = re.search(pattern, element, re.IGNORECASE)
-                if match:
-                    # Lấy từ khóa chính xác như trong văn bản (giữ nguyên cách viết hoa/thường)
-                    found_keyword = match.group(0)
-                    
-                    # Thay thế từ khóa bằng link, giữ nguyên cách viết hoa/thường
-                    new_text = re.sub(pattern, 
+                # Thay thế từ khóa bằng link, giữ nguyên cách viết hoa/thường
+                new_text = re.sub(pattern, 
                                 f'<a href="{random_link}">{found_keyword}</a>', 
                                 element, 
                                 count=1, 
                                 flags=re.IGNORECASE)
-                    
-                    # Tạo một đối tượng mới từ HTML đã thay thế
-                    new_fragment = BeautifulSoup(new_text, 'html.parser')
-                    
-                    # Thay thế element cũ bằng element mới
-                    element.replace_with(new_fragment)
-                    
-                    modified = True
-                    update_log(f"Đã thêm internal link cho từ khóa: {found_keyword}")
-                    random_kw_found = True
-                    break
-            
-            if random_kw_found:
+                
+                # Tạo một đối tượng mới từ HTML đã thay thế
+                new_fragment = BeautifulSoup(new_text, 'html.parser')
+                
+                # Thay thế element cũ bằng element mới
+                element.replace_with(new_fragment)
+                
+                # Cập nhật lại content_text từ soup đã sửa đổi
+                content_text = str(soup)
+                
+                modified = True
+                update_log(f"Đã thêm internal link cho từ khóa: {found_keyword}")
+                random_kw_found = True
                 break
-
-        # Cập nhật content_text sau khi đã sửa đổi soup
-        if random_kw_found:
-            content_text = str(soup)
                 
         if not random_kw_found:
             # Keyword not found - use template text
@@ -1385,18 +1387,28 @@ def start_processing():
                             # Make sure folder exists
                             if not os.path.exists(folder_path):
                                 os.makedirs(folder_path)
-                                
-                            # Process post and add images
-                            process_post_and_add_images(
-                                wordpress_url, 
-                                username, 
-                                password, 
-                                post_id, 
-                                content, 
-                                image_model, 
-                                max_images, 
-                                folder_path
+                            # Trước khi thêm hình ảnh, lấy nội dung mới nhất của bài viết
+                            get_post_url = f"{wordpress_url}/wp-json/wp/v2/posts/{post_id}"
+                            response = requests.get(
+                                get_post_url,
+                                auth=HTTPBasicAuth(username, password)
                             )
+
+                            if response.status_code == 200:
+                                # Lấy nội dung mới nhất đã có internal links
+                                updated_content = response.json()['content']['rendered']
+                                
+                                # Sử dụng nội dung đã được cập nhật với internal links
+                                process_post_and_add_images(
+                                    wordpress_url, 
+                                    username, 
+                                    password, 
+                                    post_id, 
+                                    updated_content,  # Dùng nội dung mới nhất thay vì content ban đầu
+                                    image_model, 
+                                    max_images, 
+                                    folder_path
+                                )
                     except Exception as e:
                         update_log(f"Lỗi khi thêm hình ảnh: {str(e)}")
                     update_log(f"Đã đăng bài '{title}' thành công! Link: {post_link}")
