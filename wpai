@@ -39,6 +39,8 @@ def get_cookies_from_browser(profile_path):
         chrome_options.add_argument(f"user-data-dir={profile_path}")
         chrome_options.add_argument(f"--profile-directory={name_profile}")
         chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--no-sandbox")  # Thêm tùy chọn này
+        chrome_options.add_argument("--disable-dev-shm-usage")  # Giảm thiểu lỗi bộ nhớ chia sẻ
         
         update_log(f"Opening Chrome with profile: {profile_path}")
         driver = webdriver.Chrome(options=chrome_options, service=service)
@@ -578,6 +580,7 @@ def process_imagen_batch(wordpress_url, username, password, post_id, soup, image
     
     images_added = 0
     modified = False
+    uploaded_images = []
     
     for img_data in images_to_process:
         if images_added >= max_images:
@@ -638,6 +641,7 @@ def process_imagen_batch(wordpress_url, username, password, post_id, soup, image
                         
                         media_data = upload_response.json()
                         media_id = media_data['id']
+                        uploaded_images.append(media_id)
                         media_url = media_data['source_url']
                     
                     img_tag = soup.new_tag('img')
@@ -697,6 +701,18 @@ def process_imagen_batch(wordpress_url, username, password, post_id, soup, image
             update_log(f"Đã cập nhật bài viết với {images_added} hình ảnh")
         else:
             update_log(f"Không thể cập nhật bài viết: {update_response.text}")
+    if uploaded_images:
+        featured_image_id = uploaded_images[0]
+        update_data = {'featured_media': featured_image_id}
+        update_response = requests.post(
+            f"{wordpress_url}/wp-json/wp/v2/posts/{post_id}",
+            auth=HTTPBasicAuth(username, password),
+            json=update_data
+        )
+        if update_response.status_code == 200:
+            update_log("Đã đặt ảnh bìa cho bài viết")
+        else:
+            update_log("Không thể đặt ảnh bìa cho bài viết")
     else:
         update_log("Không có ảnh nào được thêm vào bài viết")
 def process_regular_images(wordpress_url, username, password, post_id, soup, images_to_process, image_model_id, max_images, folder_path):
@@ -822,7 +838,7 @@ def process_regular_images(wordpress_url, username, password, post_id, soup, ima
         featured_image_id = uploaded_images[0]
         update_data = {'featured_media': featured_image_id}
         update_response = requests.post(
-            update_url,
+            f"{wordpress_url}/wp-json/wp/v2/posts/{post_id}",
             auth=HTTPBasicAuth(username, password),
             json=update_data
         )
