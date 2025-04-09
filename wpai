@@ -4,9 +4,6 @@ profile_init_failures = [0, 0, 0, 0, 0]
 previous_chat_metadata = None
 
 def split_chrome_profile_path(full_path):
-    """
-    Split Chrome profile path into user data directory and profile name
-    """
     if not full_path:
         return None, None
         
@@ -28,9 +25,6 @@ def split_chrome_profile_path(full_path):
     return user_data_dir, profile_name
 
 def get_cookies_from_browser(profile_path):
-    """
-    Get Gemini cookies from Chrome browser
-    """
     if not profile_path:
         update_log("No Chrome profile selected!")
         return None, None
@@ -89,10 +83,8 @@ def get_cookies_from_browser(profile_path):
         return None, None
 
 async def init_gemini_client(profile_path):
-    """Initialize Gemini client with cookies from the given profile"""
     global gemini_client
     
-    # Get cookies from browser
     secure_1psid, secure_1psidts = get_cookies_from_browser(profile_path)
     
     if not secure_1psid:
@@ -100,7 +92,6 @@ async def init_gemini_client(profile_path):
         return False
     
     try:
-        # Create and initialize client
         gemini_client = GeminiClient(secure_1psid, secure_1psidts)
         await gemini_client.init(timeout=30, auto_close=False, close_delay=300, auto_refresh=False)
         update_log("Gemini client initialized successfully")
@@ -111,8 +102,7 @@ async def init_gemini_client(profile_path):
         return False
 
 async def generate_image_with_gemini(prompt, output_path, filename):
-    """Generate image using Gemini Web API"""
-    global gemini_client, current_profile_index, profile_init_failures, previous_chat_metadata  # Add previous_chat_metadata
+    global gemini_client, current_profile_index, profile_init_failures, previous_chat_metadata
     valid_profiles = []
     for i, entry in enumerate(chrome_profile_entries):
         if entry.get().strip():
@@ -122,27 +112,21 @@ async def generate_image_with_gemini(prompt, output_path, filename):
         update_log("Error: No valid Chrome profiles found")
         return None
     
-    # Make sure we're using a valid profile index
     if current_profile_index not in valid_profiles:
         current_profile_index = valid_profiles[0]
     if not gemini_client:
-        # Try to initialize with current profile
         profile_path = chrome_profile_entries[current_profile_index].get().strip()
         success = await init_gemini_client(profile_path)
         
         if not success:
-            # Increment failure count for this profile
             profile_init_failures[current_profile_index] += 1
             
-            # If we've failed twice with this profile, move to next one
             if profile_init_failures[current_profile_index] >= 2:
                 profile_init_failures[current_profile_index] = 0
                 current_profile_index = (current_profile_index + 1) % 5
                 update_log(f"Switching to profile {current_profile_index + 1}")
-                # Reset previous chat metadata when switching profiles
                 previous_chat_metadata = None
             
-            # Try the next profile
             profile_path = chrome_profile_entries[current_profile_index].get().strip()
             success = await init_gemini_client(profile_path)
             
@@ -151,33 +135,25 @@ async def generate_image_with_gemini(prompt, output_path, filename):
                 return None
     
     try:
-        # Generate content with image using previous chat metadata for continuity
         update_log("Generating image with Gemini...")
         
-        # Start a chat with previous metadata if available
         chat = gemini_client.start_chat(metadata=previous_chat_metadata)
         
-        # Send the prompt
         response = await chat.send_message(f"{prompt}\nGenerate a high-quality, photorealistic image.")
         
-        # Save the metadata for next time
         previous_chat_metadata = response.metadata
         
         if not response.images or len(response.images) == 0:
             update_log("No images were generated")
             return None
         
-        # Save the first image
         await response.images[0].save(path=output_path, filename=filename, verbose=True)
         
-        # Return the full path to the saved image
         return os.path.join(output_path, filename)
     
     except Exception as e:
         update_log(f"Error generating image: {e}")
-        # Reset client so we'll try to initialize again next time
         gemini_client = None
-        # Also reset metadata on error
         previous_chat_metadata = None
         return None
 
@@ -192,14 +168,11 @@ def run_async(coro):
 
 
 def validate_required_apis():
-    """Validate that all required API keys are provided based on selected models"""
-    # Check content model requirements
     content_model = model_content_var.get()
     image_model = model_image_var.get()
     
     missing_apis = []
     
-    # Content model requirements
     if content_model in [1, 2, 3]:
         if not openai_entry.get().strip():
             missing_apis.append("OpenAI")
@@ -210,7 +183,6 @@ def validate_required_apis():
         if not deeseek_entry.get().strip():
             missing_apis.append("Deepseek")
     
-    # Image model requirements (if images are requested)
     try:
         max_images = int(image_number_entry.get().strip() or "0")
     except ValueError:
@@ -232,27 +204,17 @@ def validate_required_apis():
     return missing_apis
 
 def sanitize_filename(text):
-    # Remove accents/diacritics
     text = unicodedata.normalize('NFKD', text)
     text = ''.join([c for c in text if not unicodedata.combining(c)])
-    
-    # Convert to lowercase and replace spaces with hyphens
     text = text.lower().strip()
     text = re.sub(r'\s+', '-', text)
-    
-    # Remove any remaining invalid filename characters
     text = re.sub(r'[^\w\-]', '', text)
-    
-    # Limit length
-    return text[:50]  # Limit to 50 chars for filename
+    return text[:50]
 
-
-# Replace or modify the existing generate_image function
 
 def generate_image(prompt, model_id):
-    """Generate an image using the selected AI model"""
     global current_profile_index
-    if model_id == 1:  # DALLE-3
+    if model_id == 1:
         api_key = openai_entry.get().strip()
         if not api_key:
             raise ValueError("API key OpenAI không được cung cấp")
@@ -268,15 +230,13 @@ def generate_image(prompt, model_id):
         
         return response.data[0].url
         
-    elif model_id == 2:  # IMAGEN3
-        # Get a temporary filename for the image
+    elif model_id == 2:
         temp_filename = f"{uuid.uuid4()}.png"
         folder_path = folder_entry.get().strip()
         
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
         
-        # Try up to 5 times with different profiles if needed
         for attempt in range(5):
             try:
                 image_path = run_async(
@@ -284,21 +244,17 @@ def generate_image(prompt, model_id):
                 )
                 
                 if image_path:
-                    # Return local path as we'll handle the upload differently
                     return f"local:{image_path}"
                     
-                # If we get here, the attempt failed but didn't raise an exception
                 update_log(f"Image generation attempt {attempt+1} failed, trying next profile")
                 current_profile_index = (current_profile_index + 1) % 5
                 
             except Exception as e:
                 update_log(f"Error in Gemini image generation (attempt {attempt+1}): {e}")
-                # Switch to next profile
                 current_profile_index = (current_profile_index + 1) % 5
         
         raise ValueError("Failed to generate image with Imagen3 after 5 attempts")   
-    elif model_id == 3:  # MIDJOURNEY/DEEPSEEK
-        # Existing Deepseek implementation
+    elif model_id == 3:
         api_key = deeseek_entry.get().strip()
         if not api_key:
             raise ValueError("API key không được cung cấp")
@@ -328,20 +284,17 @@ def generate_image(prompt, model_id):
         raise ValueError("Model không được hỗ trợ")
 
 def reset_gemini_chat():
-    """Reset Gemini chat metadata to start a fresh conversation"""
     global previous_chat_metadata
     previous_chat_metadata = None
     update_log("Gemini chat context has been reset")
 
 def stop_processing():
-    """Stop the running process"""
     global processing_active, previous_chat_metadata
     processing_active = False
-    previous_chat_metadata = None  # Reset chat when stopping
+    previous_chat_metadata = None
     update_log("Đã nhận lệnh dừng. Đang dừng sau khi hoàn thành tác vụ hiện tại...")
 
 async def refresh_gemini_session():
-    """Refresh the Gemini session to keep it alive"""
     global gemini_client
     
     if gemini_client:
@@ -357,49 +310,37 @@ async def refresh_gemini_session():
         return False
 
 def process_internal_linking(wordpress_url, username, password, post_id, post_content, post_link, keyword, excel_file, row_idx):
-    """Process internal linking for a WordPress post"""
     update_log("Đang xử lý internal linking cho bài viết...")
     
     try:
-        # Parse the HTML content
         soup = BeautifulSoup(post_content, 'html.parser')
         content_text = str(soup)
         modified = False
         
-        # Format keyword với chữ cái đầu viết hoa
         capitalized_keyword = keyword.capitalize()
         title_case_keyword = keyword.title()
         
-        # Step 1: Insert post's own link into its keyword in the content
-        # Thử tìm các biến thể khác nhau của keyword trong nội dung
         text_elements = soup.find_all(string=True)
         keyword_found = False
         
         for element in text_elements:
-            # Bỏ qua các text node trong các thẻ script, style, hoặc đã là thẻ <a>
             if element.parent is None or element.parent.name in ['script', 'style', 'a']:
                 continue
             
-            # Tạo một pattern với re.IGNORECASE để không phân biệt chữ hoa/thường
             pattern = r'\b' + re.escape(keyword) + r'\b'
             
-            # Tìm từ khóa trong phần text
             match = re.search(pattern, element, re.IGNORECASE)
             if match:
-                # Lấy từ khóa chính xác như trong văn bản (giữ nguyên cách viết hoa/thường)
                 found_keyword = match.group(0)
                 
-                # Thay thế từ khóa bằng link, giữ nguyên cách viết hoa/thường
                 new_text = re.sub(pattern, 
                                  f'<a href="{post_link}">{found_keyword}</a>', 
                                  element, 
                                  count=1, 
                                  flags=re.IGNORECASE)
                 
-                # Tạo một đối tượng mới từ HTML đã thay thế
                 new_fragment = BeautifulSoup(new_text, 'html.parser')
                 
-                # Thay thế element cũ bằng element mới
                 element.replace_with(new_fragment)
                 
                 modified = True
@@ -412,11 +353,9 @@ def process_internal_linking(wordpress_url, username, password, post_id, post_co
 
         content_text = str(soup)
         
-        # Step 2: Load workbook to get keywords and their links
         wb = openpyxl.load_workbook(excel_file)
         ws = wb.active
         
-        # Collect all available keywords and internal links (excluding current keyword)
         keywords_and_links = []
         for r in range(2, ws.max_row + 1):
             kw = ws.cell(row=r, column=1).value
@@ -427,18 +366,15 @@ def process_internal_linking(wordpress_url, username, password, post_id, post_co
         
         if not keywords_and_links:
             update_log("Không tìm thấy từ khóa nào phù hợp để tạo internal link")
-            # Update Excel file with post link
             ws.cell(row=row_idx, column=6, value=post_link)
             wb.save(excel_file)
             return
         
-        # Step 3: Determine how many internal links to create
         try:
             min_links = int(number_entry1.get().strip() or "1")
             max_links = int(number_entry2.get().strip() or "3")
             if min_links > max_links:
                 min_links, max_links = max_links, min_links
-            # Số lượng không vượt quá số từ khóa có sẵn
             max_possible = min(max_links, len(keywords_and_links))
             num_links = min_links + int(time.time() % (max_possible - min_links + 1))
         except ValueError:
@@ -446,17 +382,14 @@ def process_internal_linking(wordpress_url, username, password, post_id, post_co
             
         update_log(f"Chọn {num_links} từ khóa khác nhau để tạo internal links")
         
-        # Step 4: Select multiple random keywords using time.time()
         selected_keywords = []
-        # Tạo một danh sách chỉ mục dựa trên time.time() để chọn từ khóa
         timestamp = int(time.time())
         indices_used = set()
         
         for i in range(num_links):
             if len(indices_used) >= len(keywords_and_links):
-                break  # Đã dùng hết tất cả từ khóa
+                break
                 
-            # Chọn một chỉ mục chưa được sử dụng
             current_idx = (timestamp + i) % len(keywords_and_links)
             attempt = 0
             while current_idx in indices_used and attempt < len(keywords_and_links):
@@ -466,47 +399,36 @@ def process_internal_linking(wordpress_url, username, password, post_id, post_co
             indices_used.add(current_idx)
             selected_keywords.append(keywords_and_links[current_idx])
         
-        # Step 5: Process each selected keyword
         keywords_found = 0
-        template_keywords = []  # Từ khóa không tìm thấy trong nội dung
+        template_keywords = []
         
         for random_kw, random_link in selected_keywords:
-            # Format random keyword với chữ cái đầu viết hoa
             capitalized_random_kw = random_kw.capitalize()
             title_case_random_kw = random_kw.title()
             random_kw_found = False
             
-            # Tìm text elements mới sau mỗi lần cập nhật
             text_elements = soup.find_all(string=True)
             
             for element in text_elements:
-                # Bỏ qua các text node trong các thẻ script, style, hoặc đã là thẻ <a>
                 if element.parent is None or element.parent.name in ['script', 'style', 'a']:
                     continue
                 
-                # Tạo một pattern với re.IGNORECASE để không phân biệt chữ hoa/thường
                 pattern = r'\b' + re.escape(random_kw) + r'\b'
                 
-                # Tìm từ khóa trong phần text
                 match = re.search(pattern, element, re.IGNORECASE)
                 if match:
-                    # Lấy từ khóa chính xác như trong văn bản (giữ nguyên cách viết hoa/thường)
                     found_keyword = match.group(0)
                     
-                    # Thay thế từ khóa bằng link, giữ nguyên cách viết hoa/thường
                     new_text = re.sub(pattern, 
                                     f'<a href="{random_link}">{found_keyword}</a>', 
                                     element, 
                                     count=1, 
                                     flags=re.IGNORECASE)
                     
-                    # Tạo một đối tượng mới từ HTML đã thay thế
                     new_fragment = BeautifulSoup(new_text, 'html.parser')
                     
-                    # Thay thế element cũ bằng element mới
                     element.replace_with(new_fragment)
                     
-                    # Cập nhật lại content_text từ soup đã sửa đổi
                     content_text = str(soup)
                     
                     modified = True
@@ -515,13 +437,10 @@ def process_internal_linking(wordpress_url, username, password, post_id, post_co
                     random_kw_found = True
                     break
             
-            # Nếu không tìm thấy từ khóa trong nội dung, thêm vào danh sách để thêm bằng template
             if not random_kw_found:
                 template_keywords.append((random_kw, random_link, title_case_random_kw))
         
-        # Step 6: Handle keywords not found in the content using templates
         if template_keywords:
-            # Get templates from the entry fields
             templates = []
             if text_entry1.get().strip():
                 templates.append(text_entry1.get().strip())
@@ -530,14 +449,11 @@ def process_internal_linking(wordpress_url, username, password, post_id, post_co
             if text_entry3.get().strip():
                 templates.append(text_entry3.get().strip())
             
-            # Use default templates if none provided
             if not templates:
                 templates = ["Bạn có thể quan tâm", "Xem thêm", "Đọc thêm"]
                 
-            # Get all h2 tags to add template text before
             h2_tags = soup.find_all('h2')
             if len(h2_tags) > 1:
-                # Select headings from the middle to the end
                 mid_point = len(h2_tags) // 2
                 target_headings = h2_tags[mid_point:mid_point+len(template_keywords)]
                 
@@ -548,33 +464,26 @@ def process_internal_linking(wordpress_url, username, password, post_id, post_co
                     
                     heading = target_headings[idx]
                     
-                    # Select random template using time.time()
                     template = templates[int(time.time() + idx) % len(templates)]
                     linked_keyword = f'<a href="{random_link}">{title_case_random_kw}</a>'
                     text_content = f"{template}: {linked_keyword}"
                     
-                    # Create a new paragraph element
                     new_p = soup.new_tag('p')
-                    new_p.string = ""  # Will be replaced with HTML content later
+                    new_p.string = ""
                     
-                    # Insert it before the heading
                     heading.insert_before(new_p)
                     blocks_added += 1
                 
                 if blocks_added > 0:
-                    # Convert back to string with the new paragraphs
                     content_text = str(soup)
                     
-                    # Replace empty paragraphs with our content
                     for idx, (_, random_link, title_case_random_kw) in enumerate(template_keywords[:blocks_added]):
-                        # Select random template for each
                         template_idx = int((time.time() + idx) % len(templates))
                         template = templates[template_idx]
                         linked_keyword = f'<a href="{random_link}">{title_case_random_kw}</a>'
                         text_content = f"{template}: {linked_keyword}"
                         content_text = content_text.replace("<p></p>", f"<p>{text_content}</p>", 1)
                     
-                    # Update content
                     soup = BeautifulSoup(content_text, 'html.parser')
                     content_text = str(soup)
                     
@@ -583,7 +492,6 @@ def process_internal_linking(wordpress_url, username, password, post_id, post_co
             else:
                 update_log("Không tìm thấy đủ tiêu đề để thêm text block")
         
-        # Step 7: Update post content if modified
         if modified:
             update_url = f"{wordpress_url}/wp-json/wp/v2/posts/{post_id}"
             update_data = {'content': content_text}
@@ -597,13 +505,11 @@ def process_internal_linking(wordpress_url, username, password, post_id, post_co
             if update_response.status_code == 200:
                 update_log("Cập nhật internal linking thành công.")
                 
-                # Update Excel file with post link
                 ws.cell(row=row_idx, column=6, value=post_link)
                 wb.save(excel_file)
             else:
                 update_log(f"Không thể cập nhật internal linking: {update_response.status_code}")
         else:
-            # Still update Excel file with post link even if content wasn't modified
             ws.cell(row=row_idx, column=6, value=post_link)
             wb.save(excel_file)
             update_log("Không có internal link nào được thêm vào.")
@@ -611,40 +517,32 @@ def process_internal_linking(wordpress_url, username, password, post_id, post_co
     except Exception as e:
         update_log(f"Lỗi khi xử lý internal linking: {str(e)}")
 def process_post_and_add_images(wordpress_url, username, password, post_id, post_content, image_model_id, max_images, folder_path):
-    """Process a WordPress post and add generated images"""
     if max_images <= 0:
         update_log("Số lượng ảnh là 0, bỏ qua chức năng tạo ảnh")
         return
     
     update_log(f"Đang xử lý bài viết để thêm hình ảnh (tối đa {max_images} ảnh)...")
     
-    # Parse the HTML content
     soup = BeautifulSoup(post_content, 'html.parser')
     
-    # Find all h2 and h3 tags
     headings = soup.find_all(['h2'])
     
-    # Tạo danh sách tất cả các prompt cần xử lý trước
     images_to_process = []
     
     for heading in headings:
         if len(images_to_process) >= max_images:
             break
         
-        # Get the heading text
         heading_text = heading.get_text().strip()
         
-        # Find the first paragraph after this heading
         next_p = heading.find_next('p')
         if not next_p:
             continue
         
         paragraph_text = next_p.get_text().strip()
         
-        # Create prompt for image generation
         prompt = f"{heading_text}\n{paragraph_text}"
         
-        # Add to processing list
         images_to_process.append({
             'heading': heading,
             'heading_text': heading_text,
@@ -655,22 +553,17 @@ def process_post_and_add_images(wordpress_url, username, password, post_id, post
         update_log("Không tìm thấy headings phù hợp để tạo ảnh")
         return
     
-    # Nếu sử dụng Gemini (Imagen3), xử lý tất cả ảnh trong một phiên
     if image_model_id == 2:
-        # Tạo và thêm ảnh bằng phương pháp batch với Gemini
         process_imagen_batch(wordpress_url, username, password, post_id, soup, images_to_process, max_images, folder_path)
     else:
-        # Xử lý theo cách thông thường cho các model khác
         process_regular_images(wordpress_url, username, password, post_id, soup, images_to_process, image_model_id, max_images, folder_path)
 
 def process_imagen_batch(wordpress_url, username, password, post_id, soup, images_to_process, max_images, folder_path):
-    """Process a batch of images using Gemini Imagen3, creating a new chat for each image"""
     global gemini_client, previous_chat_metadata, current_profile_index
     
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
     
-    # Khởi tạo Gemini client nếu chưa có
     if not gemini_client:
         for i, entry in enumerate(chrome_profile_entries):
             if entry.get().strip():
@@ -686,7 +579,6 @@ def process_imagen_batch(wordpress_url, username, password, post_id, soup, image
     images_added = 0
     modified = False
     
-    # Xử lý từng prompt riêng biệt, như trong geminiselenium.py
     for img_data in images_to_process:
         if images_added >= max_images:
             break
@@ -695,51 +587,40 @@ def process_imagen_batch(wordpress_url, username, password, post_id, soup, image
         heading_text = img_data['heading_text']
         prompt = img_data['prompt']
         
-        tries_remaining = 3  # Số lần thử lại mỗi prompt
+        tries_remaining = 3
         image_generated = False
         
         while tries_remaining > 0 and not image_generated:
             try:
                 update_log(f"Đang tạo ảnh cho: {heading_text} (lần thử {4-tries_remaining}/3)")
                 
-                # Tạo tên file tạm thời
                 temp_filename = f"{uuid.uuid4()}.png"
                 
-                # Tạo một chat mới cho mỗi prompt, nhưng vẫn dùng metadata từ lần trước
                 if gemini_client:
-                    # Tạo chat mới cho mỗi lần xử lý, như trong geminiselenium.py
                     chat = gemini_client.start_chat(metadata=previous_chat_metadata)
                     
-                    # Gửi prompt và nhận response
                     response = run_async(chat.send_message(f"{prompt}\nGenerate a high-quality, photorealistic image."))
                     
-                    # Lưu metadata cho lần tiếp theo
                     previous_chat_metadata = response.metadata
                     
-                    # Kiểm tra có ảnh được tạo không
                     if not response.images or len(response.images) == 0:
                         update_log(f"Không có ảnh được tạo cho: {heading_text}")
                         tries_remaining -= 1
                         continue
                     
-                    # Lưu ảnh tạo được
                     run_async(response.images[0].save(path=folder_path, filename=temp_filename))
                     
-                    # Đổi tên file theo heading
                     sanitized_heading = sanitize_filename(heading_text)
                     new_filename = f"{sanitized_heading}.png"
                     new_file_path = os.path.join(folder_path, new_filename)
                     
-                    # Đảm bảo tên file là duy nhất
                     if os.path.exists(new_file_path):
                         timestamp = int(time.time())
                         new_filename = f"{sanitized_heading}-{timestamp}.png"
                         new_file_path = os.path.join(folder_path, new_filename)
                     
-                    # Đổi tên file
                     os.rename(os.path.join(folder_path, temp_filename), new_file_path)
                     
-                    # Upload và thêm ảnh vào bài viết
                     with open(new_file_path, 'rb') as img:
                         upload_url = f"{wordpress_url}/wp-json/wp/v2/media"
                         files = {'file': (new_filename, img, 'image/png')}
@@ -755,12 +636,10 @@ def process_imagen_batch(wordpress_url, username, password, post_id, soup, image
                             tries_remaining -= 1
                             continue
                         
-                        # Lấy thông tin media đã upload
                         media_data = upload_response.json()
                         media_id = media_data['id']
                         media_url = media_data['source_url']
                     
-                    # Thêm ảnh vào sau heading
                     img_tag = soup.new_tag('img')
                     img_tag['src'] = media_url
                     img_tag['alt'] = heading_text
@@ -786,25 +665,22 @@ def process_imagen_batch(wordpress_url, username, password, post_id, soup, image
             except Exception as e:
                 update_log(f"Lỗi khi tạo ảnh: {str(e)}")
                 tries_remaining -= 1
-                gemini_client = None  # Reset client để thử lại
+                gemini_client = None
                 
-                # Nếu hết số lần thử, chuyển sang profile khác
                 if tries_remaining == 0:
                     current_profile_index = (current_profile_index + 1) % 5
                     update_log(f"Lỗi - chuyển sang profile {current_profile_index + 1}")
                     
-                    # Tìm profile hợp lệ tiếp theo
                     for _ in range(5):
                         profile_path = chrome_profile_entries[current_profile_index].get().strip()
                         if profile_path:
                             success = run_async(init_gemini_client(profile_path))
                             if success:
                                 previous_chat_metadata = None
-                                tries_remaining = 1  # Thử lại với profile mới
+                                tries_remaining = 1
                                 break
                         current_profile_index = (current_profile_index + 1) % 5
     
-    # Cập nhật bài viết nếu có ảnh được thêm vào
     if modified:
         updated_content = str(soup)
         
@@ -824,12 +700,12 @@ def process_imagen_batch(wordpress_url, username, password, post_id, soup, image
     else:
         update_log("Không có ảnh nào được thêm vào bài viết")
 def process_regular_images(wordpress_url, username, password, post_id, soup, images_to_process, image_model_id, max_images, folder_path):
-    """Process images using other models (DALL-E or Deepseek)"""
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
     
     images_added = 0
     modified = False
+    uploaded_images = []
     
     for img_data in images_to_process:
         if images_added >= max_images:
@@ -842,39 +718,31 @@ def process_regular_images(wordpress_url, username, password, post_id, soup, ima
         try:
             update_log(f"Tạo ảnh cho đề mục: {heading_text}")
             
-            # Generate image
             image_result = generate_image(prompt, image_model_id)
             
             if not image_result:
                 update_log(f"Không thể tạo ảnh cho đề mục: {heading_text}")
                 continue
             
-            # Handle local or remote images
             if image_result.startswith("local:"):
-                # Local image from Gemini
-                file_path = image_result[6:]  # Remove "local:" prefix
+                file_path = image_result[6:]
                 sanitized_heading = sanitize_filename(heading_text)
                 
-                # Rename the file to use the heading
                 new_filename = f"{sanitized_heading}.png"
                 new_file_path = os.path.join(folder_path, new_filename)
                 
-                # If file exists, add a timestamp to make it unique
                 if os.path.exists(new_file_path):
                     timestamp = int(time.time())
                     new_filename = f"{sanitized_heading}-{timestamp}.png"
                     new_file_path = os.path.join(folder_path, new_filename)
                 
-                # Rename file
                 os.rename(file_path, new_file_path)
                 file_path = new_file_path
                 
                 update_log(f"Đã lưu ảnh tại: {file_path}")
             else:
-                # Remote URL from other APIs
                 image_url = image_result
                 
-                # Download image
                 response = requests.get(image_url)
                 if response.status_code != 200:
                     update_log(f"Không thể tải ảnh từ URL: {image_url}")
@@ -889,11 +757,9 @@ def process_regular_images(wordpress_url, username, password, post_id, soup, ima
                 
                 update_log(f"Đã lưu ảnh tại: {file_path}")
             
-            # Upload image to WordPress
             upload_url = f"{wordpress_url}/wp-json/wp/v2/media"
             
             with open(file_path, 'rb') as img:
-                # Determine file type
                 file_ext = os.path.splitext(file_path)[1].lower()
                 mime_type = 'image/jpeg' if file_ext in ['.jpg', '.jpeg'] else 'image/png'
                 
@@ -912,19 +778,17 @@ def process_regular_images(wordpress_url, username, password, post_id, soup, ima
                 media_data = upload_response.json()
                 media_id = media_data['id']
                 media_url = media_data['source_url']
+                uploaded_images.append(media_id)
             
-            # Insert image after the first paragraph
             img_tag = soup.new_tag('img')
             img_tag['src'] = media_url
             img_tag['alt'] = heading_text
             img_tag['class'] = f'wp-image-{media_id}'
 
-            # Create a figure tag to properly wrap the image
             figure_tag = soup.new_tag('figure')
             figure_tag['class'] = 'wp-block-image size-full'
             figure_tag.append(img_tag)
 
-            # Insert the image right after the heading 
             heading.insert_after(figure_tag)
             
             images_added += 1
@@ -935,7 +799,6 @@ def process_regular_images(wordpress_url, username, password, post_id, soup, ima
             update_log(f"Lỗi khi xử lý ảnh: {str(e)}")
             continue
     
-    # Cập nhật bài viết nếu có ảnh được thêm vào
     if modified:
         updated_content = str(soup)
         
@@ -954,242 +817,21 @@ def process_regular_images(wordpress_url, username, password, post_id, soup, ima
             update_log(f"Không thể cập nhật bài viết: {update_response.text}")
     else:
         update_log("Không có ảnh nào được thêm vào bài viết")
-
-# def generate_content(model_id, prompt, keyword):
-#     """Generate content using selected AI model"""
-#     formatted_prompt = f"{prompt}\n\nVUI LÒNG GIỮ NGUYÊN TẤT CẢ CÁC THẺ HTML NHƯ <h2>, <h3>, <p>, <b>, <strong>, <ul>, <li> TRONG BÀI VIẾT. BÀI VIẾT PHẢI CÓ BỐ CỤC CHUẨN SEO VỚI CÁC HEADING."
     
-    
-#     # OpenAI models
-#     if model_id in [1, 2, 3]:
-#         api_key = openai_entry.get().strip()
-#         if not api_key:
-#             raise ValueError("API key OpenAI không được cung cấp")
-        
-#         model_name = {
-#             1: "gpt-4",
-#             2: "gpt-4o-mini",
-#             3: "gpt-4o"
-#         }.get(model_id)
-        
-#         client = OpenAI(api_key=api_key)
-#         response = client.chat.completions.create(
-#             model=model_name,
-#             messages=[{"role": "user", "content": formatted_prompt}],
-#         )
-        
-#         return response.choices[0].message.content
-    
-#     # Claude models
-#     elif model_id in [4, 5]:
-#         api_key = claude_entry.get().strip()
-#         if not api_key:
-#             raise ValueError("API key Claude không được cung cấp")
-        
-#         model_name = {
-#             4: "claude-3-5-sonnet-20240620",
-#             5: "claude-3-7-sonnet-20240307"
-#         }.get(model_id)
-        
-#         client = Anthropic(api_key=api_key)
-#         response = client.messages.create(
-#             model=model_name,
-#             max_tokens=4000,
-#             messages=[{"role": "user", "content": formatted_prompt}]
-#         )
-        
-#         return response.content[0].text
-    
-#     # Deepseek models
-#     elif model_id in [6, 7, 8]:
-#         api_key = deeseek_entry.get().strip()
-#         if not api_key:
-#             raise ValueError("API key Deepseek không được cung cấp")
-        
-#         model_name = {
-#             6: "deepseek-chat",
-#             7: "deepseek-v3",
-#             8: "deepseek-r1"
-#         }.get(model_id)
-        
-#         headers = {
-#             "Authorization": f"Bearer {api_key}",
-#             "Content-Type": "application/json"
-#         }
-        
-#         data = {
-#             "model": model_name,
-#             "messages": [{"role": "user", "content": formatted_prompt}],
-#             "max_tokens": 4000
-#         }
-        
-#         response = requests.post(
-#             "https://api.deepseek.com/v1/chat/completions",
-#             headers=headers,
-#             json=data
-#         )
-        
-#         if response.status_code == 200:
-#             return response.json()["choices"][0]["message"]["content"]
-#         else:
-#             raise ValueError(f"Deepseek API error: {response.text}")
-    
-#     else:
-#         raise ValueError(f"Model ID {model_id} không được hỗ trợ")
-
-# def generate_content(model_id, prompt, keyword):
-#     """Generate content using selected AI model with chunking for longer output"""
-#     # Phần 1: Tạo outline và phần giới thiệu
-#     outline_prompt = f"""
-#     {prompt}
-    
-#     Hãy tạo một bố cục chi tiết cho bài viết về chủ đề "{keyword}" với:
-#     1. Phần giới thiệu chi tiết (khoảng 300 từ) giới thiệu về chủ đề và tại sao nó quan trọng
-#     2. ít nhât 8-10 tiêu đề chính (<h2>) với mô tả ngắn về nội dung của mỗi phần
-#     3. ít nhất 3-4 tiêu đề phụ (<h3>) cho mỗi tiêu đề chính
-    
-#     Format phản hồi:
-#     - Phần giới thiệu phải là đoạn văn HTML hoàn chỉnh với thẻ <p>
-#     - Mỗi tiêu đề chính phải sử dụng thẻ <h2>
-#     - Mỗi tiêu đề phụ phải sử dụng thẻ <h3>
-#     - Thêm mô tả ngắn cho mỗi tiêu đề để tôi hiểu nội dung sẽ bao gồm những gì
-    
-#     VUI LÒNG GIỮ NGUYÊN TẤT CẢ CÁC THẺ HTML.
-#     """
-    
-#     update_log("Đang tạo bố cục và phần giới thiệu...")
-#     outline_content = generate_content_with_model(model_id, outline_prompt)
-    
-#     # Phân tích outline để chia thành hai nửa
-#     soup = BeautifulSoup(outline_content, 'html.parser')
-#     h2_tags = soup.find_all('h2')
-    
-#     # Nếu không tìm thấy thẻ h2, thử phân tích dựa trên dòng
-#     if not h2_tags:
-#         update_log("Không tìm đủ thẻ H2 trong bố cục, thử phân tích văn bản...")
-#         lines = outline_content.split('\n')
-#         headings = []
-#         for line in lines:
-#             if '<h2>' in line:
-#                 headings.append(line.strip())
-        
-#         if len(headings) < 4:
-#             update_log("Không thể phân tích bố cục, thử tạo lại...")
-#             return generate_content(model_id, prompt, keyword)  # Thử lại
-    
-#     # Tìm vị trí giữa để chia outline thành hai phần
-#     middle_index = len(h2_tags) // 2
-#     first_half_h2s = h2_tags[:middle_index]
-#     second_half_h2s = h2_tags[middle_index:]
-    
-#     # Trích xuất nội dung giới thiệu
-#     introduction = ""
-#     intro_p = soup.find('p')
-#     if intro_p:
-#         introduction = str(intro_p)
-#     else:
-#         # Nếu không tìm thấy thẻ p, lấy nội dung đầu tiên trước thẻ h2 đầu tiên
-#         for element in soup.contents:
-#             if element.name != 'h2' and str(element).strip():
-#                 introduction += str(element)
-#             else:
-#                 break
-    
-#     # Phần 2: Phát triển chi tiết nửa đầu của outline
-#     first_half_titles = [h2.text.strip() for h2 in first_half_h2s]
-#     first_half_prompt = f"""
-#     {prompt}
-    
-#     Hãy phát triển chi tiết nửa đầu của bài viết về "{keyword}" với những tiêu đề sau:
-    
-#     {', '.join(first_half_titles)}
-    
-#     Yêu cầu:
-#     1. Bắt đầu với phần giới thiệu đã có (KHÔNG viết lại phần giới thiệu)
-#     2. Dành ít nhất 500-700 từ cho mỗi tiêu đề chính
-#     3. Sử dụng ít nhất 3-4 tiêu đề phụ (<h3>) cho mỗi tiêu đề chính
-#     4. Bao gồm ví dụ cụ thể, dữ liệu, và phân tích chuyên sâu
-#     5. Dùng các thẻ <p> cho đoạn văn, <ul><li> cho danh sách, <strong> để nhấn mạnh
-    
-#     VUI LÒNG GIỮ NGUYÊN TẤT CẢ CÁC THẺ HTML NHƯ <h2>, <h3>, <p>, <ul>, <li>, <strong> TRONG BÀI VIẾT.
-#     """
-    
-#     update_log("Đang phát triển nửa đầu của bài viết...")
-#     first_half_content = generate_content_with_model(model_id, first_half_prompt)
-    
-#     # Phần 3: Phát triển chi tiết nửa sau của outline và kết luận
-#     second_half_titles = [h2.text.strip() for h2 in second_half_h2s]
-#     second_half_prompt = f"""
-#     {prompt}
-    
-#     Hãy phát triển chi tiết nửa sau của bài viết về "{keyword}" với những tiêu đề sau:
-    
-#     {', '.join(second_half_titles)}
-    
-#     Yêu cầu:
-#     1. Tiếp tục từ nửa đầu đã được phát triển (không lặp lại phần giới thiệu)
-#     2. Dành ít nhất 5-700 từ cho mỗi tiêu đề chính
-#     3. Sử dụng ít nhất 3-4 tiêu đề phụ (<h3>) cho mỗi tiêu đề chính
-#     4. Bao gồm ví dụ cụ thể, dữ liệu, và phân tích chuyên sâu
-#     5. Dùng các thẻ <p> cho đoạn văn, <ul><li> cho danh sách, <strong> để nhấn mạnh
-#     KHÔNG viết phần kết luận. Phần kết luận sẽ được tạo riêng.
-#     VUI LÒNG GIỮ NGUYÊN TẤT CẢ CÁC THẺ HTML NHƯ <h2>, <h3>, <p>, <ul>, <li>, <strong> TRONG BÀI VIẾT.
-#     """
-    
-#     update_log("Đang phát triển nửa sau của bài viết...")
-#     second_half_content = generate_content_with_model(model_id, second_half_prompt)
-    
-
-#     conclusion_prompt = f"""
-#     {prompt}
-    
-#     Hãy viết một phần kết luận chi tiết về "{keyword}" dựa trên những tiêu đề chính đã được phát triển:
-    
-#     Tiêu đề nửa đầu: {', '.join(first_half_titles)}
-#     Tiêu đề nửa sau: {', '.join(second_half_titles)}
-    
-#     Yêu cầu chi tiết cho phần kết luận:
-#     1. Tiêu đề phần kết luận phải sử dụng thẻ <h2>Kết luận</h2>
-#     2. Độ dài phần kết luận phải từ 300-500 từ
-#     3. Phần kết luận phải bao gồm:
-#        - Tóm tắt ngắn gọn nhưng đầy đủ các điểm chính đã được đề cập trong bài viết
-#        - Kết nối các ý tưởng và khái niệm lại với nhau một cách mạch lạc
-#        - Câu cuối phải gây ấn tượng mạnh, thúc đẩy người đọc suy nghĩ hoặc hành động
-#     4. Sử dụng thẻ <p> cho các đoạn văn và <strong> để nhấn mạnh các điểm quan trọng
-    
-#     VUI LÒNG GIỮ NGUYÊN TẤT CẢ CÁC THẺ HTML.
-#     """
-    
-#     update_log("Đang tạo phần kết luận chi tiết của bài viết...")
-#     conclusion_content = generate_content_with_model(model_id, conclusion_prompt)
-    
-#     # Kết hợp nội dung
-#     update_log("Đang kết hợp các phần nội dung...")
-    
-#     # Xử lý nửa đầu
-#     first_half_soup = BeautifulSoup(first_half_content, 'html.parser')
-#     intro_in_first_half = first_half_soup.find('p')
-#     if intro_in_first_half:
-#         intro_in_first_half.decompose()  # Loại bỏ phần giới thiệu trùng lặp nếu có
-    
-#     # Kết hợp nội dung với định dạng HTML
-#     full_content = f"""
-#     {introduction}
-    
-#     {str(first_half_soup)}
-    
-#     {second_half_content}
-
-#     {conclusion_content}
-#     """
-    
-#     update_log("Hoàn thành tạo nội dung!")
-#     return full_content
+    if uploaded_images:
+        featured_image_id = uploaded_images[0]
+        update_data = {'featured_media': featured_image_id}
+        update_response = requests.post(
+            update_url,
+            auth=HTTPBasicAuth(username, password),
+            json=update_data
+        )
+        if update_response.status_code == 200:
+            update_log("Đã đặt ảnh bìa cho bài viết")
+        else:
+            update_log("Không thể đặt ảnh bìa cho bài viết")
 
 def generate_content(model_id, prompt, keyword):
-    """Generate content using selected AI model with 4 sections and improved prompts"""
-    
-    # Phần 1: Tạo outline và phần giới thiệu
     outline_prompt = f"""
     {prompt}
     
@@ -1210,21 +852,18 @@ def generate_content(model_id, prompt, keyword):
     update_log("Đang tạo bố cục và phần giới thiệu...")
     outline_content = generate_content_with_model(model_id, outline_prompt)
     
-    # Phân tích outline để chia thành các phần
     soup = BeautifulSoup(outline_content, 'html.parser')
     h2_tags = soup.find_all('h2')
     
     if len(h2_tags) < 4:
         update_log("Không thể phân tích bố cục, thử tạo lại...")
-        return generate_content(model_id, prompt, keyword)  # Thử lại
+        return generate_content(model_id, prompt, keyword)
     
-    # Chia outline thành 4 phần
     quarter_index = len(h2_tags) // 3
     first_quarter_h2s = h2_tags[:quarter_index]
     second_quarter_h2s = h2_tags[quarter_index:quarter_index * 2]
     third_quarter_h2s = h2_tags[quarter_index * 2:quarter_index * 3]
     
-    # Trích xuất nội dung giới thiệu
     introduction = ""
     intro_p = soup.find('p')
     if intro_p:
@@ -1236,7 +875,6 @@ def generate_content(model_id, prompt, keyword):
             else:
                 break
     
-    # Phần 2: Phát triển chi tiết từng phần của bài viết
     def develop_section(h2_tags, section_name):
         titles = [h2.text.strip() for h2 in h2_tags]
         section_prompt = f"""
@@ -1281,7 +919,6 @@ def generate_content(model_id, prompt, keyword):
         third_section_content = third_section_content.split('```html')[1].split('```')[0]
 
     
-    # Phần 3: Kết bài
     conclusion_prompt = f"""
     {prompt}
     
@@ -1297,7 +934,6 @@ def generate_content(model_id, prompt, keyword):
     update_log("Đang tạo phần kết luận...")
     conclusion_content = generate_content_with_model(model_id, conclusion_prompt)
     
-    # Kết hợp nội dung
     update_log("Đang kết hợp các phần nội dung...")
     full_content = f"""
     {introduction}
@@ -1311,15 +947,12 @@ def generate_content(model_id, prompt, keyword):
     {conclusion_content}
     """
     
-    # Xử lý chuyển đổi tiêu đề markdown `##` thành thẻ HTML `<h2>`
     full_content = full_content.replace("##", "<h2>").replace("###", "<h3>")
     
     update_log("Hoàn thành tạo nội dung!")
     return full_content
 
 def generate_content_with_model(model_id, prompt):
-    """Helper function to generate content with specified model"""
-    # OpenAI models
     if model_id in [1, 2, 3]:
         api_key = openai_entry.get().strip()
         if not api_key:
@@ -1339,7 +972,6 @@ def generate_content_with_model(model_id, prompt):
         
         return response.choices[0].message.content
     
-    # Claude models
     elif model_id in [4, 5]:
         api_key = claude_entry.get().strip()
         if not api_key:
@@ -1359,7 +991,6 @@ def generate_content_with_model(model_id, prompt):
         
         return response.content[0].text
     
-    # Deepseek models
     elif model_id in [6, 7, 8]:
         api_key = deeseek_entry.get().strip()
         if not api_key:
@@ -1397,22 +1028,16 @@ def generate_content_with_model(model_id, prompt):
         raise ValueError(f"Model ID {model_id} không được hỗ trợ")
 
 def save_excel_without_indices(df, filename):
-    """Special function to save Excel files without any indices or headers"""
     try:
-        # Create a completely new workbook using openpyxl directly
         wb = openpyxl.Workbook()
         ws = wb.active
         
-        # Write data directly to worksheet cells
         for r_idx, row in enumerate(df.values):
             for c_idx, value in enumerate(row):
-                # Convert NaN to empty string
                 if value is None or (isinstance(value, float) and math.isnan(value)):
                     value = ""
-                # Excel rows/columns are 1-indexed
                 ws.cell(row=r_idx+1, column=c_idx+1, value=value)
         
-        # Save the file
         wb.save(filename)
         update_log(f"Đã lưu Excel thành công: {os.path.basename(filename)}")
         return True
@@ -1421,12 +1046,10 @@ def save_excel_without_indices(df, filename):
         return False
 
 def start_processing():
-    """Start processing Excel data and generating WordPress posts"""
     def run():
         global processing_active
         processing_active = True
         
-        # Validate inputs
         excel_file = data_input_entry.get().strip()
         wordpress_url = url_entry.get().strip()
         username = username_entry.get().strip()
@@ -1440,7 +1063,6 @@ def start_processing():
             update_log(f"Nhập thiếu API: {', '.join(missing_apis)}")
             return
             
-        # Get selected categories
         selected_categories = []
         for widget in scrollable_frame.winfo_children():
             if isinstance(widget, tk.Checkbutton) and widget.var.get() == 1:
@@ -1451,21 +1073,17 @@ def start_processing():
             update_log("Vui lòng chọn ít nhất một danh mục")
             return
         
-        # Get selected content model
         content_model = model_content_var.get()
         if content_model == 0:
             update_log("Vui lòng chọn model để tạo nội dung")
             return
             
-        # Load Excel file with openpyxl
         try:
-            # Load workbook and get active sheet
             wb = openpyxl.load_workbook(excel_file)
             ws = wb.active
             update_log(f"Đã tải file Excel: {os.path.basename(excel_file)}")
             
-            # Check if sheet has enough columns
-            if ws.max_column < 5:  # At least 5 columns needed (A-E)
+            if ws.max_column < 5:
                 update_log(f"File Excel cần có ít nhất 5 cột (A-E). Hiện tại chỉ có {ws.max_column} cột.")
                 return
                 
@@ -1473,32 +1091,24 @@ def start_processing():
             update_log(f"Lỗi khi tải file Excel: {str(e)}")
             return
             
-        # Process rows starting from row 2
         consecutive_empty_keywords = 0
         
-        # Iterate through rows starting from row 2
         for row_idx in range(2, ws.max_row + 1):
-            # Check if processing should stop
             if not processing_active:
                 update_log("Đã dừng xử lý theo yêu cầu.")
                 return
                 
-            # Get data from each column by position
-            # Column A (từ khóa)
             keyword_cell = ws.cell(row=row_idx, column=1).value
             keyword = str(keyword_cell).strip() if keyword_cell else ""
             
-            # Column E (trạng thái)
             status_cell = ws.cell(row=row_idx, column=5).value
             status = str(status_cell).strip() if status_cell else ""
             
-            # Skip rows with existing status
             if status and status.lower() in ['public', 'draft', 'publish']:
                 update_log(f"Bỏ qua dòng {row_idx}: đã có trạng thái '{status}'")
                 consecutive_empty_keywords = 0
                 continue
                 
-            # Check for empty keywords
             if not keyword or keyword.lower() == 'nan' or keyword.lower() == 'none':
                 consecutive_empty_keywords += 1
                 update_log(f"Dòng {row_idx} không có từ khóa (lần thứ {consecutive_empty_keywords}/3)")
@@ -1510,26 +1120,20 @@ def start_processing():
             else:
                 consecutive_empty_keywords = 0
                 
-            # Get remaining data from columns
-            # Column B (tiêu đề)
             title_cell = ws.cell(row=row_idx, column=2).value
             title = str(title_cell).strip() if title_cell else ""
             
-            # Column C (prompt)
             prompt_cell = ws.cell(row=row_idx, column=3).value
             prompt = str(prompt_cell).strip() if prompt_cell else ""
             
-            # Column D (URL slug)
             url_slug_cell = ws.cell(row=row_idx, column=4).value
             url_slug = str(url_slug_cell).strip() if url_slug_cell else ""
             
-            # Generate content
             update_log(f"Đang tạo nội dung cho từ khóa: {keyword}")
 
             content = None
             error_message = None
 
-            # Try up to 3 times
             for attempt in range(3):
                 try:
                     update_log(f"Lần thử {attempt+1}/3...")
@@ -1541,16 +1145,13 @@ def start_processing():
                     update_log(f"Lỗi khi tạo nội dung: {error_message}")
                     time.sleep(2)
             
-            # Handle content generation failure
             if not content:
                 update_log("Không thể tạo nội dung sau 3 lần thử. Dừng xử lý.")
                 ws.cell(row=row_idx, column=5, value="Lỗi: Không thể tạo nội dung")
                 
-                # Save workbook
                 wb.save(excel_file)
                 return
 
-            # Now post the complete content with images
             post_data = {
                 'title': title,
                 'content': content,
@@ -1558,7 +1159,6 @@ def start_processing():
                 'categories': selected_categories
             }
 
-            # Add slug if provided
             if url_slug:
                 post_data['slug'] = url_slug
                 
@@ -1572,15 +1172,11 @@ def start_processing():
                     timeout=30
                 )
                 
-                # Update the existing WordPress posting section in start_processing()
-                # Add this after the successful post confirmation:
-
                 if response.status_code in [200, 201]:
                     post_data = response.json()
                     post_link = post_data.get('link', '')
                     post_id = post_data.get('id')
                     
-                    # Update Excel status
                     status_value = 'Draft' if posting_mode_var.get() == 2 else 'Publish'
                     ws.cell(row=row_idx, column=5, value=status_value)
                     ws.cell(row=row_idx, column=6, value=post_link)
@@ -1599,7 +1195,6 @@ def start_processing():
                             row_idx
                         )
                     
-                    # Check if we need to add images
                     try:
                         image_model = model_image_var.get()
                         max_images = 0
@@ -1611,10 +1206,8 @@ def start_processing():
                         folder_path = folder_entry.get().strip()
                         
                         if image_model > 0 and max_images > 0 and folder_path:
-                            # Make sure folder exists
                             if not os.path.exists(folder_path):
                                 os.makedirs(folder_path)
-                            # Trước khi thêm hình ảnh, lấy nội dung mới nhất của bài viết
                             get_post_url = f"{wordpress_url}/wp-json/wp/v2/posts/{post_id}"
                             response = requests.get(
                                 get_post_url,
@@ -1622,16 +1215,14 @@ def start_processing():
                             )
 
                             if response.status_code == 200:
-                                # Lấy nội dung mới nhất đã có internal links
                                 updated_content = response.json()['content']['rendered']
                                 
-                                # Sử dụng nội dung đã được cập nhật với internal links
                                 process_post_and_add_images(
                                     wordpress_url, 
                                     username, 
                                     password, 
                                     post_id, 
-                                    updated_content,  # Dùng nội dung mới nhất thay vì content ban đầu
+                                    updated_content,
                                     image_model, 
                                     max_images, 
                                     folder_path
@@ -1644,7 +1235,6 @@ def start_processing():
                     update_log(f"Lỗi khi đăng bài: {error_msg}")
                     ws.cell(row=row_idx, column=5, value=error_msg)
                     
-                    # Save and stop on error
                     wb.save(excel_file)
                     return
             except Exception as e:
@@ -1654,7 +1244,6 @@ def start_processing():
                 wb.save(excel_file)
                 return
             
-            # Save after each successful post
             wb.save(excel_file)
             time.sleep(2)
             
@@ -1663,14 +1252,12 @@ def start_processing():
     threading.Thread(target=run).start()
 
 def load_data():
-    """Load configuration data from a selected file"""
     file_path = filedialog.askopenfilename(
         title="Select Configuration File",
         filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")]
     )
     
     if not file_path:
-        # User canceled the file dialog
         return
     
     try:
@@ -1678,7 +1265,6 @@ def load_data():
             with open(file_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
                 
-            # Populate API fields
             openai_entry.delete(0, tk.END)
             openai_entry.insert(0, config["api_keys"].get("openai", ""))
             
@@ -1691,7 +1277,6 @@ def load_data():
             deeseek_entry.delete(0, tk.END)
             deeseek_entry.insert(0, config["api_keys"].get("deepseek", ""))
             
-            # Set model selections
             model_content_var.set(config["model_settings"].get("content_model", 0))
             model_image_var.set(config["model_settings"].get("image_model", 0))
             
@@ -1701,7 +1286,6 @@ def load_data():
             folder_entry.delete(0, tk.END)
             folder_entry.insert(0, config["model_settings"].get("images_folder", ""))
             
-            # WordPress settings
             url_entry.delete(0, tk.END)
             url_entry.insert(0, config["wordpress"].get("url", ""))
             
@@ -1714,7 +1298,6 @@ def load_data():
             data_input_entry.delete(0, tk.END)
             data_input_entry.insert(0, config["wordpress"].get("data_input", ""))
             
-            # Posting mode
             posting_mode_var.set(config["posting"].get("mode", 1))
 
             chrome_profiles = config["model_settings"].get("chrome_profiles", ["", "", "", "", ""])
@@ -1724,11 +1307,9 @@ def load_data():
                     chrome_profile_entries[i].insert(0, profile)
 
             if "internal_linking" in config:
-                # Toggle button
                 toggle_var.set(config["internal_linking"].get("enabled", False))
-                toggle_switch()  # Update toggle UI
+                toggle_switch()
                 
-                # Text templates
                 templates = config["internal_linking"].get("text_templates", ["", "", ""])
                 text_entry1.delete(0, tk.END)
                 text_entry1.insert(0, templates[0] if len(templates) > 0 else "")
@@ -1739,7 +1320,6 @@ def load_data():
                 text_entry3.delete(0, tk.END)
                 text_entry3.insert(0, templates[2] if len(templates) > 2 else "")
                 
-                # Number entries
                 number_entry1.delete(0, tk.END)
                 number_entry1.insert(0, config["internal_linking"].get("min_links", ""))
                 
@@ -1753,20 +1333,17 @@ def load_data():
         update_log(f"Lỗi khi tải cấu hình: {str(e)}")
 
 def test_post():
-    """Test post to WordPress with minimal content"""
     def run():
         wordpress_url = url_entry.get().strip()
         username = username_entry.get().strip()
         password = password_entry.get()
         
-        # Check if required fields are filled
         if not wordpress_url or not username or not password:
             update_log("Vui lòng nhập đầy đủ URL, username và password của WordPress")
             return
             
         update_log("Đang thử đăng bài lên WordPress...")
         
-        # Get selected categories
         selected_categories = []
         for widget in scrollable_frame.winfo_children():
             if isinstance(widget, tk.Checkbutton) and widget.var.get() == 1:
@@ -1777,7 +1354,6 @@ def test_post():
             update_log("Vui lòng chọn ít nhất một danh mục")
             return
             
-        # Create test post content
         post_data = {
             'title': 'aaaa',
             'content': 'aaaa',
@@ -1785,7 +1361,6 @@ def test_post():
             'categories': selected_categories
         }
         
-        # Post to WordPress
         post_url = f"{wordpress_url}/wp-json/wp/v2/posts"
         
         try:
@@ -1808,11 +1383,7 @@ def test_post():
     
     threading.Thread(target=run).start()
 
-# Modify the save_data function
-
 def save_data():
-    """Save all input data to a configuration file"""
-    # Get chrome profile paths
     chrome_profiles = []
     for entry in chrome_profile_entries:
         chrome_profiles.append(entry.get().strip())
@@ -1840,7 +1411,6 @@ def save_data():
         "posting": {
             "mode": posting_mode_var.get()
         },
-        # Thêm phần lưu cấu hình internal linking
         "internal_linking": {
             "enabled": toggle_var.get(),
             "text_templates": [
@@ -1853,7 +1423,6 @@ def save_data():
         }
     }
     
-    # Lưu cấu hình
     try:
         with open("wordpress_ai_config.json", "w", encoding="utf-8") as f:
             json.dump(config, f, indent=4)
@@ -1862,13 +1431,11 @@ def save_data():
         update_log(f"Lỗi khi lưu cấu hình: {str(e)}")
 
 def load_saved_data():
-    """Load saved configuration data"""
     try:
         if os.path.exists("wordpress_ai_config.json"):
             with open("wordpress_ai_config.json", "r", encoding="utf-8") as f:
                 config = json.load(f)
                 
-            # Populate API fields
             openai_entry.delete(0, tk.END)
             openai_entry.insert(0, config["api_keys"].get("openai", ""))
             
@@ -1881,7 +1448,6 @@ def load_saved_data():
             deeseek_entry.delete(0, tk.END)
             deeseek_entry.insert(0, config["api_keys"].get("deepseek", ""))
             
-            # Set model selections
             model_content_var.set(config["model_settings"].get("content_model", 0))
             model_image_var.set(config["model_settings"].get("image_model", 0))
             
@@ -1891,7 +1457,6 @@ def load_saved_data():
             folder_entry.delete(0, tk.END)
             folder_entry.insert(0, config["model_settings"].get("images_folder", ""))
             
-            # WordPress settings
             url_entry.delete(0, tk.END)
             url_entry.insert(0, config["wordpress"].get("url", ""))
             
@@ -1904,23 +1469,18 @@ def load_saved_data():
             data_input_entry.delete(0, tk.END)
             data_input_entry.insert(0, config["wordpress"].get("data_input", ""))
             
-            # Posting mode
             posting_mode_var.set(config["posting"].get("mode", 1))
 
-            # Chrome profiles
             chrome_profiles = config["model_settings"].get("chrome_profiles", ["", "", "", "", ""])
             for i, profile in enumerate(chrome_profiles):
                 if i < len(chrome_profile_entries):
                     chrome_profile_entries[i].delete(0, tk.END)
                     chrome_profile_entries[i].insert(0, profile)
                     
-            # Load internal linking settings if available
             if "internal_linking" in config:
-                # Toggle button
                 toggle_var.set(config["internal_linking"].get("enabled", False))
-                toggle_switch()  # Update toggle UI
+                toggle_switch()
                 
-                # Text templates
                 templates = config["internal_linking"].get("text_templates", ["", "", ""])
                 text_entry1.delete(0, tk.END)
                 text_entry1.insert(0, templates[0] if len(templates) > 0 else "")
@@ -1931,7 +1491,6 @@ def load_saved_data():
                 text_entry3.delete(0, tk.END)
                 text_entry3.insert(0, templates[2] if len(templates) > 2 else "")
                 
-                # Number entries
                 number_entry1.delete(0, tk.END)
                 number_entry1.insert(0, config["internal_linking"].get("min_links", ""))
                 
@@ -1942,7 +1501,6 @@ def load_saved_data():
     except Exception as e:
         update_log(f"Lỗi khi tải cấu hình: {str(e)}")
 def check_openai_api_key(api_key):
-    """Kiểm tra API key của OpenAI"""
     try:
         client = OpenAI(api_key=api_key)
         response = client.models.list()
@@ -1951,16 +1509,13 @@ def check_openai_api_key(api_key):
         return False, f"API key OpenAI không hợp lệ: {str(e)}"
 
 def check_gemini_api_key(api_key):
-    """Kiểm tra API key của Google Gemini"""
     try:
         genai.configure(api_key=api_key)
         
-        # Liệt kê các model có sẵn
         available_models = genai.list_models()
         for model in available_models:
             model.name
         
-        # Tìm model phù hợp để kiểm tra
         print("Danh sách các model có sẵn:")
         for model in available_models:
             print(f"- {model}")
@@ -1969,7 +1524,6 @@ def check_gemini_api_key(api_key):
         return False, f"API key Gemini không hợp lệ: {str(e)}"
 
 def check_claude_api_key(api_key):
-    """Kiểm tra API key của Anthropic Claude"""
     try:
         client = Anthropic(api_key=api_key)
         response = client.messages.create(
@@ -1982,7 +1536,6 @@ def check_claude_api_key(api_key):
         return False, f"API key Claude không hợp lệ: {str(e)}"
 
 def check_deepseek_api_key(api_key):
-    """Kiểm tra API key của Deepseek"""
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
@@ -2008,7 +1561,6 @@ def check_deepseek_api_key(api_key):
         return False, f"API key Deepseek không hợp lệ: {str(e)}"
 
 def test_rest_api():
-    """Test if WordPress REST API is available"""
     def run():
         wordpress_url = url_entry.get().strip()
         if not wordpress_url:
@@ -2017,7 +1569,6 @@ def test_rest_api():
             
         update_log("Đang kiểm tra REST API của WordPress...")
         
-        # Endpoint để kiểm tra REST API
         rest_api_url = f"{wordpress_url}/wp-json/"
         
         try:
@@ -2033,7 +1584,6 @@ def test_rest_api():
 
 
 def test_login():
-    """Test WordPress login credentials"""
     def run():
         wordpress_url = url_entry.get().strip()
         username = username_entry.get().strip()
@@ -2045,7 +1595,6 @@ def test_login():
             
         update_log("Đang kiểm tra đăng nhập WordPress...")
         
-        # Endpoint để kiểm tra đăng nhập (sẽ trả về thông tin người dùng hiện tại nếu đăng nhập thành công)
         login_test_url = f"{wordpress_url}/wp-json/wp/v2/users/me"
         
         try:
@@ -2080,16 +1629,14 @@ def load_category():
         
         categories = get_categories(wordpress_url, username, password)
         if categories:
-            # Clear existing categories
             for widget in scrollable_frame.winfo_children():
                 widget.destroy()
             
-            # Create new checkboxes with proper variable storage
             for category in categories:
                 var = tk.IntVar()
                 cb = tk.Checkbutton(scrollable_frame, text=category['name'], bg="#f0f0f0", variable=var)
-                cb.var = var  # Store the variable with the widget
-                cb.category_id = category['id']  # Store the category ID with the widget
+                cb.var = var
+                cb.category_id = category['id']
                 cb.pack(anchor='w')
                 
         update_log("Danh sách category đã được tải")
@@ -2107,14 +1654,12 @@ def get_categories(wordpress_url, username, password):
         print(f"Failed to retrieve categories: {response.status_code}")
         return None
 def update_log(message):
-    """Adds a message to the log text area"""
     log_text.configure(state='normal')
     log_text.insert(tk.END, message + "\n")
-    log_text.see(tk.END)  # Auto-scroll to the end
+    log_text.see(tk.END)
     log_text.configure(state='disabled')
 
 def test_openai_api():
-    """Test OpenAI API key"""
     def run():
         api_key = openai_entry.get().strip()
         if not api_key:
@@ -2132,7 +1677,6 @@ def test_openai_api():
 
 
 def test_gemini_api():
-    """Test Gemini API key"""
     api_key = gemini_entry.get().strip()
     if not api_key:
         update_log("Please enter a Gemini API key")
@@ -2147,7 +1691,6 @@ def test_gemini_api():
         update_log("Error: " + message)
 
 def test_claude_api():
-    """Test Claude API key"""
     api_key = claude_entry.get().strip()
     if not api_key:
         update_log("Please enter a Claude API key")
@@ -2162,7 +1705,6 @@ def test_claude_api():
         update_log("Error: " + message)
 
 def test_deepseek_api():
-    """Test Deepseek API key"""
     def run():
         api_key = deeseek_entry.get().strip()
         if not api_key:
@@ -2182,7 +1724,6 @@ def test_deepseek_api():
 
 
 def choose_file():
-    """Select an Excel file for data input"""
     file_path = filedialog.askopenfilename(
         title="Chọn File Excel",
         filetypes=[
@@ -2196,7 +1737,6 @@ def choose_file():
         update_log(f"Đã chọn file Excel: {os.path.basename(file_path)}")
 
 def choose_folder():
-    """Select a folder to save generated images"""
     folder_path = filedialog.askdirectory(
         title="Chọn Thư Mục Lưu Ảnh AI"
     )
@@ -2211,7 +1751,6 @@ root = tk.Tk()
 root.title("Post WordPress")
 root.geometry("1200x750")
 
-# API Section
 api_frame = tk.Frame(root, bg="#f0f0f0", bd=2, relief="groove")
 api_frame.place(x=30, y=30, width=1120, height=110)
 
@@ -2241,7 +1780,6 @@ model_frame.place(x=30, y=150, width=1120, height=140)
 
 tk.Label(model_frame, text="CHỌN MODEL CONTENT", font=("Arial", 14), bg="#f0f0f0").place(x=10, y=10)
 
-# Variable to hold the selected model content
 model_content_var = tk.IntVar()
 
 tk.Radiobutton(model_frame, text="CHATGPT 4.0", bg="#f0f0f0", variable=model_content_var, value=1).place(x=20, y=40)
@@ -2255,7 +1793,6 @@ tk.Radiobutton(model_frame, text="R1", bg="#f0f0f0", variable=model_content_var,
 
 tk.Label(model_frame, text="CHỌN MODEL ẢNH", font=("Arial", 14), bg="#f0f0f0").place(x=600, y=10)
 
-# Variable to hold the selected model image
 model_image_var = tk.IntVar()
 
 tk.Radiobutton(model_frame, text="DALLE-3", bg="#f0f0f0", variable=model_image_var, value=1).place(x=600, y=40)
@@ -2280,12 +1817,9 @@ folder_entry = tk.Entry(model_frame, width=40)
 folder_entry.place(x=680, y=100)
 tk.Button(model_frame, text="Chọn Folder", command=choose_folder).place(x=1010, y=95)
 
-# WordPress Setup and Category Section
-# WordPress Setup and Category Section
 wordpress_category_frame = tk.Frame(root, bg="#f0f0f0", bd=2, relief="groove")
 wordpress_category_frame.place(x=30, y=300, width=1120, height=180)
 
-# WordPress Setup Section
 wordpress_frame = tk.Frame(wordpress_category_frame, bg="#f0f0f0")
 wordpress_frame.place(x=10, y=10, width=540, height=160)
 
@@ -2311,7 +1845,6 @@ data_input_entry = tk.Entry(wordpress_frame, width=40)
 data_input_entry.place(x=100, y=125)
 tk.Button(wordpress_frame, text="Chọn file", command=choose_file).place(x=430, y=120)
 
-# Category Section
 category_frame = tk.Frame(wordpress_category_frame, bg="#f0f0f0")
 category_frame.place(x=570, y=10, width=540, height=160)
 
@@ -2319,13 +1852,12 @@ tk.Label(category_frame, text="LOAD CATEGORY", font=("Arial", 14), bg="#f0f0f0")
 tk.Button(category_frame, text="LOAD CATEGORY", command=load_category).place(x=20, y=40)
 
 scrollable_container = tk.Frame(category_frame, bg="#f0f0f0", bd=1, relief="solid")
-scrollable_container.place(x=200, y=10, width=330, height=100)  # Height chỉ đủ cho ~5 checkbox
+scrollable_container.place(x=200, y=10, width=330, height=100)
 
 canvas = tk.Canvas(scrollable_container, bg="#f0f0f0", width=350, height=78)
 scrollbar = tk.Scrollbar(scrollable_container, orient="vertical", command=canvas.yview)
 scrollable_frame = tk.Frame(canvas, bg="#f0f0f0", width=330)
 
-# Function to update scrollregion when frame changes
 def configure_scrollregion(event):
     canvas.configure(scrollregion=canvas.bbox("all"))
 
@@ -2337,45 +1869,32 @@ canvas.configure(yscrollcommand=scrollbar.set)
 canvas.grid(row=0, column=0, sticky="nsew")
 scrollbar.grid(row=0, column=1, sticky="ns")
 
-# Cấu hình để canvas mở rộng khi cần thiết
 scrollable_container.grid_rowconfigure(0, weight=1)
 scrollable_container.grid_columnconfigure(0, weight=1)
 
-# Thêm hàm xử lý sự kiện lăn chuột
 def _on_mousewheel(event):
     canvas.yview_scroll(int(-1*(event.delta/70)), "units")
 
-# Liên kết sự kiện lăn chuột với canvas
 canvas.bind_all("<MouseWheel>", _on_mousewheel)
-
-# Thêm một số checkbox mẫu để test
 
 tk.Label(category_frame, text="CHẾ ĐỘ ĐĂNG", font=("Arial", 14), bg="#f0f0f0").place(x=10, y=130)
 
-# Variable to hold the selected posting mode
 posting_mode_var = tk.IntVar()
 
 tk.Radiobutton(category_frame, text="Public (công khai)", bg="#f0f0f0", variable=posting_mode_var, value=1).place(x=160, y=130)
 tk.Radiobutton(category_frame, text="Draf (nháp)", bg="#f0f0f0", variable=posting_mode_var, value=2).place(x=280, y=130)
 
-# Action Buttons and Log Section
 action_log_frame = tk.Frame(root, bg="#f0f0f0", bd=2)
 action_log_frame.place(x=30, y=490, width=1120, height=180)
 
-# Action Buttons and Log Section
 action_frame = tk.Frame(action_log_frame, bg="#f0f0f0")
 action_frame.place(x=10, y=10, width=1100, height=160)
 
-# Add this after the image model selection section in the model_frame
-
-# Chrome profiles for Gemini
 tk.Label(model_frame, text="Chrome Profiles for Imagen3:", bg="#f0f0f0").place(x=600, y=140)
 
-# Create a new frame for Chrome profiles
 chrome_profiles_frame = tk.Frame(root, bg="#f0f0f0", bd=2, relief="groove")
 chrome_profiles_frame.place(x=30, y=300, width=1120, height=130)
 
-# Chrome profile entries
 chrome_profile_entries = []
 for i in range(5):
     tk.Label(chrome_profiles_frame, text=f"Chrome Profile {i+1}:", bg="#f0f0f0").place(x=20, y=10 + i*22)
@@ -2384,9 +1903,8 @@ for i in range(5):
     chrome_profile_entries.append(entry)
     tk.Button(chrome_profiles_frame, text="Browse", command=lambda idx=i: choose_chrome_profile(idx)).place(x=600, y=8 + i*22)
 
-# Tạo một khung mới bên cạnh phần browser profile
 additional_frame = tk.Frame(root, bg="#f0f0f0", bd=2)
-additional_frame.place(x=700, y=310, width=400, height=100)  # Đặt cạnh phần browser profile
+additional_frame.place(x=700, y=310, width=400, height=100)
 text_entry1 = tk.Entry(additional_frame, width=30)
 text_entry1.place(x=100, y=10)
 text_entry2 = tk.Entry(additional_frame, width=30)
@@ -2397,23 +1915,20 @@ text_entry3.place(x=100, y=70)
 def toggle_switch():
     if toggle_var.get():
         toggle_canvas.itemconfig(toggle_circle, fill="green")
-        toggle_canvas.coords(toggle_circle, 30, 5, 50, 25)  # Gạt sang phải
+        toggle_canvas.coords(toggle_circle, 30, 5, 50, 25)
     else:
         toggle_canvas.itemconfig(toggle_circle, fill="red")
-        toggle_canvas.coords(toggle_circle, 5, 5, 25, 25)  # Gạt sang trái
+        toggle_canvas.coords(toggle_circle, 5, 5, 25, 25)
 
 toggle_var = tk.BooleanVar(value=False)
 toggle_canvas = tk.Canvas(additional_frame, width=55, height=30, bg="#f0f0f0", highlightthickness=0)
 toggle_canvas.place(x=10, y=40)
 
-# Vẽ nền và hình tròn
 toggle_canvas.create_rectangle(5, 5, 50, 25, fill="#ccc", outline="")
 toggle_circle = toggle_canvas.create_oval(5, 5, 25, 25, fill="red", outline="")
 
-# Liên kết sự kiện click để chuyển đổi trạng thái
 toggle_canvas.bind("<Button-1>", lambda event: toggle_var.set(not toggle_var.get()) or toggle_switch())
 
-# Hai ô nhập số
 tk.Label(additional_frame, text="Số 1:", bg="#f0f0f0").place(x=200, y=100)
 number_entry1 = tk.Entry(additional_frame, width=5)
 number_entry1.place(x=300, y=40)
@@ -2421,12 +1936,11 @@ number_entry1.place(x=300, y=40)
 tk.Label(additional_frame, text="Số 2:", bg="#f0f0f0").place(x=300, y=100)
 number_entry2 = tk.Entry(additional_frame, width=5)
 number_entry2.place(x=350, y=40)
-# Update the existing frame positions
+
 wordpress_category_frame.place(x=30, y=440, width=1120, height=180)
 action_log_frame.place(x=30, y=630, width=1120, height=180)
 
 def choose_chrome_profile(idx):
-    """Select a Chrome profile directory"""
     folder_path = filedialog.askdirectory(
         title=f"Select Chrome Profile {idx+1} Directory"
     )
@@ -2443,7 +1957,6 @@ tk.Button(action_frame, text="LƯU DỮ LIỆU", bg="orange", width=16, command=
 tk.Button(action_frame, text="TẢI DỮ LIỆU", bg="lightblue", width=16, command=load_data).place(x=340, y=20)
 tk.Button(action_frame, text="THOÁT PHẦN MỀM", bg="pink", width=16).place(x=340, y=60)
 
-# Log Section
 log_text = tk.Text(action_frame, state='disabled', bg="#f0f0f0", wrap='word')
 log_text.place(x=600, y=10, width=450, height=80)
 update_log("Lưu ý: Không mở file excel trong thời gian chạy, tránh bị lỗi lưu data")
